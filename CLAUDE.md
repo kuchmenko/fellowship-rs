@@ -18,21 +18,24 @@ Single crate (`agent-runtime`) with modules:
 - `cargo clippy --all-targets -- -D warnings` — lint
 - `cargo fmt --check` — format check
 
+## Commits
+
+Use [Conventional Commits](https://www.conventionalcommits.org/):
+- `feat:` — new feature (bumps minor)
+- `fix:` — bug fix (bumps patch)
+- `feat!:` or `fix!:` — breaking change (bumps minor pre-1.0)
+- `chore:`, `docs:`, `refactor:`, `test:` — no release
+
 ## Release process
 
-This project uses SemVer. See `RELEASING.md` for the full checklist.
+Automated via [release-please](https://github.com/googleapis/release-please).
+See `RELEASING.md` for details.
 
-**Quick version:**
-1. Update `CHANGELOG.md` — move Unreleased items to new version section
-2. Bump `version` in `Cargo.toml`
-3. `git commit -m "release: vX.Y.Z"` → `git tag vX.Y.Z` → push
-4. GitHub Actions creates the release automatically
+**Flow:** conventional commits on `main` → release-please creates Release PR → merge PR → GitHub Release + tag created automatically.
 
-**When to suggest a release to the user:**
-- When multiple features or fixes have accumulated in Unreleased
+**Do NOT** manually edit `CHANGELOG.md` or bump version — release-please handles both.
+
+**When to suggest merging the Release PR:**
+- When meaningful features or fixes have accumulated
 - After a breaking API change
 - When the user asks about versioning or shipping
-
-**Pre-1.0 SemVer:**
-- MINOR = breaking changes or significant features
-- PATCH = bug fixes, small improvements

@@ -9,41 +9,36 @@ This project uses [Semantic Versioning](https://semver.org/):
   - Bump **PATCH** for bug fixes and small improvements
 - **Post-1.0**: standard SemVer rules apply
 
-## When to release
+## How releases work
 
-- After a meaningful batch of features or fixes lands on `master`
-- After any breaking API change (bump minor)
-- When a bug fix is urgent enough to warrant a standalone release
+This project uses [release-please](https://github.com/googleapis/release-please) for automated releases.
 
-## Release checklist
+### Commit conventions
 
-1. **Verify CI is green** on `master`
+Commits must follow [Conventional Commits](https://www.conventionalcommits.org/):
 
-2. **Update CHANGELOG.md**
-   - Move items from `[Unreleased]` into a new `[X.Y.Z] - YYYY-MM-DD` section
-   - Categorize changes: Added, Changed, Deprecated, Removed, Fixed, Security
+```
+feat: add OpenAI provider          → bumps MINOR (0.1.0 → 0.2.0)
+fix: handle empty tool response    → bumps PATCH (0.1.0 → 0.1.1)
+feat!: redesign Tool trait         → bumps MINOR (breaking, pre-1.0)
+chore: update dependencies         → no release
+docs: update README                → no release
+```
 
-3. **Bump version in `Cargo.toml`**
-   ```
-   version = "X.Y.Z"
-   ```
+### Release flow
 
-4. **Commit the release**
-   ```
-   git add Cargo.toml Cargo.lock CHANGELOG.md
-   git commit -m "release: vX.Y.Z"
-   ```
+1. Push conventional commits to `main`
+2. release-please automatically creates/updates a **Release PR** with:
+   - Version bump in `Cargo.toml`
+   - Updated `CHANGELOG.md`
+3. **Merge the Release PR** when ready to ship
+4. release-please creates a GitHub Release + git tag automatically
 
-5. **Tag and push**
-   ```
-   git tag vX.Y.Z
-   git push && git push --tags
-   ```
+### Manual override
 
-6. **Verify** the GitHub Release was created automatically from the tag
+If you need to force a specific version or release out-of-band:
 
-## Post-release
-
-- Bump version in `Cargo.toml` to next dev version (e.g. `0.2.0` → `0.3.0`)
-  if a new minor cycle is starting, or leave as-is for patch releases.
-- Add a fresh `## [Unreleased]` section to CHANGELOG.md if it was consumed.
+```
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
