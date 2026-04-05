@@ -11,7 +11,7 @@
 //! async fn main() -> anyhow::Result<()> {
 //!     let agent = Agent::builder()
 //!         .provider(Anthropic::from_env())
-//!         .model("claude-sonnet-4-6-20250627")
+//!         .model("claude-sonnet-4-6")
 //!         .system("You are a helpful coding assistant.")
 //!         .tools(tools::defaults())
 //!         .build();

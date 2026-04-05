@@ -1,0 +1,36 @@
+name: Integration Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: "Test tier to run"
+        type: choice
+        options:
+          - smoke
+          - full
+        default: smoke
+
+env:
+  CARGO_TERM_COLOR: always
+  ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+jobs:
+  integration:
+    name: Integration (${{ inputs.tier }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Run smoke tests (haiku)
+        if: ${{ inputs.tier == 'smoke' }}
+        run: cargo test --test integration smoke_ -- --ignored --test-threads=1
+
+      - name: Run all integration tests (haiku + sonnet)
+        if: ${{ inputs.tier == 'full' }}
+        run: cargo test --test integration -- --ignored --test-threads=1
