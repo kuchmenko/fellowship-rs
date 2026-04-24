@@ -2,23 +2,69 @@ use std::time::Duration;
 
 use thiserror::Error;
 
+use crate::agent::AgentResult;
+
+/// Error returned by [`crate::Agent::run`].
+///
+/// Every variant carries a `partial: AgentResult` holding whatever delta
+/// was accumulated before the failure. Callers that maintain their own
+/// history (the stateless-agent contract) can persist progress on error:
+///
+/// ```ignore
+/// match agent.run(history.clone(), cancel).await {
+///     Ok(result) | Err(e) => {
+///         history.extend(result_or_partial(e).new_messages);
+///         save_session(&history);
+///     }
+/// }
+/// ```
 #[derive(Debug, Error)]
 pub enum AgentError {
-    #[error("max turns ({0}) reached without completion")]
-    MaxTurnsReached(usize),
+    #[error("max turns ({turns}) reached without completion")]
+    MaxTurnsReached { turns: usize, partial: AgentResult },
 
-    #[error("provider error: {0}")]
-    Provider(#[from] ProviderError),
+    #[error("provider error: {source}")]
+    Provider {
+        #[source]
+        source: ProviderError,
+        partial: AgentResult,
+    },
+
+    #[error("cancelled")]
+    Cancelled { partial: AgentResult },
 
     #[error("tool '{tool_name}' failed: {source}")]
     Tool {
         tool_name: String,
         #[source]
         source: ToolError,
+        partial: AgentResult,
     },
 }
 
-/// Errors returned by [`LlmProvider`] implementations.
+impl AgentError {
+    /// Borrow the partial result accumulated before the error.
+    pub fn partial(&self) -> &AgentResult {
+        match self {
+            AgentError::MaxTurnsReached { partial, .. }
+            | AgentError::Provider { partial, .. }
+            | AgentError::Cancelled { partial }
+            | AgentError::Tool { partial, .. } => partial,
+        }
+    }
+
+    /// Consume the error and take ownership of the partial result.
+    pub fn into_partial(self) -> AgentResult {
+        match self {
+            AgentError::MaxTurnsReached { partial, .. }
+            | AgentError::Provider { partial, .. }
+            | AgentError::Cancelled { partial }
+            | AgentError::Tool { partial, .. } => partial,
+        }
+    }
+}
+
+/// Errors returned by [`crate::LlmProvider`] implementations.
 ///
 /// Retry policy lives with the caller — the provider only classifies.
 /// Use [`ProviderError::is_retryable`] and [`ProviderError::retry_after`]

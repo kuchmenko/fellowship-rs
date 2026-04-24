@@ -1,14 +1,18 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use agent_runtime::message::{Content, StopReason, Usage};
+use agent_runtime::message::{Content, Message, StopReason, Usage};
 use agent_runtime::provider::Response;
 use agent_runtime::providers::Mock;
-use agent_runtime::{Agent, AgentError};
+use agent_runtime::{Agent, AgentError, CancellationToken};
 use serde_json::json;
 
 fn test_dir() -> std::path::PathBuf {
     std::env::current_dir().unwrap()
+}
+
+fn prompt(text: &str) -> Vec<Message> {
+    vec![Message::user_text(text)]
 }
 
 // --- Simple text response (no tools, 1 turn) ---
@@ -21,11 +25,15 @@ async fn single_turn_text_response() {
         .working_dir(test_dir())
         .build();
 
-    let result = agent.run("Hi").await.unwrap();
+    let result = agent
+        .run(prompt("Hi"), CancellationToken::new())
+        .await
+        .unwrap();
 
     assert_eq!(result.text, "Hello, world!");
-    // 2 messages: user prompt + assistant response
-    assert_eq!(result.messages.len(), 2);
+    // Delta is assistant-only: input user message is not echoed back.
+    assert_eq!(result.new_messages.len(), 1);
+    assert_eq!(result.stop_reason, StopReason::EndTurn);
 }
 
 // --- Tool call → result → final text (2 LLM calls) ---
@@ -62,11 +70,14 @@ async fn tool_call_then_text_response() {
         .working_dir(test_dir())
         .build();
 
-    let result = agent.run("run echo hello").await.unwrap();
+    let result = agent
+        .run(prompt("run echo hello"), CancellationToken::new())
+        .await
+        .unwrap();
 
     assert_eq!(result.text, "The command output: hello");
-    // user → assistant(tool_use) → user(tool_result) → assistant(text) = 4
-    assert_eq!(result.messages.len(), 4);
+    // Delta: assistant(tool_use), user(tool_result), assistant(text) = 3
+    assert_eq!(result.new_messages.len(), 3);
 }
 
 // --- Multiple tool calls in a single response ---
@@ -110,11 +121,14 @@ async fn multiple_tool_calls_single_response() {
         .working_dir(test_dir())
         .build();
 
-    let result = agent.run("run two commands").await.unwrap();
+    let result = agent
+        .run(prompt("run two commands"), CancellationToken::new())
+        .await
+        .unwrap();
     assert_eq!(result.text, "Both commands ran successfully");
 
-    // Check that tool results message contains 2 results
-    let tool_results_msg = &result.messages[2]; // user(tool_results)
+    // new_messages[1] is the user(tool_results) message
+    let tool_results_msg = &result.new_messages[1];
     assert_eq!(tool_results_msg.content.len(), 2);
 }
 
@@ -122,7 +136,6 @@ async fn multiple_tool_calls_single_response() {
 
 #[tokio::test]
 async fn max_turns_exceeded() {
-    // Provider always requests a tool call → infinite loop
     let mock = Mock::new(|_req| {
         Ok(Response {
             content: vec![Content::ToolUse {
@@ -143,8 +156,39 @@ async fn max_turns_exceeded() {
         .working_dir(test_dir())
         .build();
 
-    let err = agent.run("loop forever").await.unwrap_err();
-    assert!(matches!(err, AgentError::MaxTurnsReached(3)));
+    let err = agent
+        .run(prompt("loop forever"), CancellationToken::new())
+        .await
+        .unwrap_err();
+    let AgentError::MaxTurnsReached { turns, partial } = &err else {
+        panic!("expected MaxTurnsReached, got {err:?}");
+    };
+    assert_eq!(*turns, 3);
+    // Partial holds the delta: (assistant + user tool_result) × 3 = 6
+    assert_eq!(partial.new_messages.len(), 6);
+    assert_eq!(partial.stop_reason, StopReason::ToolUse);
+}
+
+// --- Cancellation ---
+
+#[tokio::test]
+async fn cancel_before_run_returns_cancelled_immediately() {
+    let mock = Mock::with_text("should never get here");
+    let agent = Agent::builder()
+        .provider(mock)
+        .model("test")
+        .working_dir(test_dir())
+        .build();
+
+    let cancel = CancellationToken::new();
+    cancel.cancel();
+
+    let err = agent.run(prompt("hi"), cancel).await.unwrap_err();
+    let AgentError::Cancelled { partial } = &err else {
+        panic!("expected Cancelled, got {err:?}");
+    };
+    assert_eq!(partial.new_messages.len(), 0);
+    assert_eq!(partial.stop_reason, StopReason::Cancelled);
 }
 
 // --- Tool not found ---
@@ -167,7 +211,6 @@ async fn tool_not_found_returns_error_result() {
                 usage: Usage::default(),
             }),
             _ => {
-                // Verify the LLM received the error in tool result
                 let last_msg = req.messages.last().unwrap();
                 let has_error = last_msg.content.iter().any(|c| match c {
                     Content::ToolResult { is_error, .. } => *is_error,
@@ -190,7 +233,10 @@ async fn tool_not_found_returns_error_result() {
         .working_dir(test_dir())
         .build();
 
-    let result = agent.run("use a fake tool").await.unwrap();
+    let result = agent
+        .run(prompt("use a fake tool"), CancellationToken::new())
+        .await
+        .unwrap();
     assert_eq!(result.text, "Tool not found, sorry.");
 }
 
@@ -234,7 +280,10 @@ async fn usage_accumulates_across_turns() {
         .working_dir(test_dir())
         .build();
 
-    let result = agent.run("test").await.unwrap();
+    let result = agent
+        .run(prompt("test"), CancellationToken::new())
+        .await
+        .unwrap();
     assert_eq!(result.usage.input_tokens, 300);
     assert_eq!(result.usage.output_tokens, 80);
 }
@@ -259,7 +308,6 @@ async fn read_tool_reads_actual_file() {
                 usage: Usage::default(),
             }),
             _ => {
-                // Verify the tool result contains Cargo.toml content
                 let last_msg = req.messages.last().unwrap();
                 let content = match &last_msg.content[0] {
                     Content::ToolResult { content, .. } => content.clone(),
@@ -286,7 +334,10 @@ async fn read_tool_reads_actual_file() {
         .working_dir(test_dir())
         .build();
 
-    let result = agent.run("read cargo toml").await.unwrap();
+    let result = agent
+        .run(prompt("read cargo toml"), CancellationToken::new())
+        .await
+        .unwrap();
     assert_eq!(result.text, "I read the Cargo.toml");
 }
 
@@ -333,11 +384,14 @@ async fn glob_tool_finds_files() {
         .working_dir(test_dir())
         .build();
 
-    let result = agent.run("find rust files").await.unwrap();
+    let result = agent
+        .run(prompt("find rust files"), CancellationToken::new())
+        .await
+        .unwrap();
     assert_eq!(result.text, "Found Rust files");
 }
 
-// --- Multi-turn tool chain (read → edit → read to verify) ---
+// --- Multi-turn tool chain (read → edit → verify) ---
 
 #[tokio::test]
 async fn multi_turn_tool_chain() {
@@ -354,7 +408,6 @@ async fn multi_turn_tool_chain() {
     let mock = Mock::new(move |_req| {
         let n = call_clone.fetch_add(1, Ordering::SeqCst);
         match n {
-            // Turn 1: read the file
             0 => Ok(Response {
                 content: vec![Content::ToolUse {
                     id: "t1".into(),
@@ -364,7 +417,6 @@ async fn multi_turn_tool_chain() {
                 stop_reason: StopReason::ToolUse,
                 usage: Usage::default(),
             }),
-            // Turn 2: edit the file
             1 => Ok(Response {
                 content: vec![Content::ToolUse {
                     id: "t2".into(),
@@ -378,7 +430,6 @@ async fn multi_turn_tool_chain() {
                 stop_reason: StopReason::ToolUse,
                 usage: Usage::default(),
             }),
-            // Turn 3: done
             _ => Ok(Response {
                 content: vec![Content::text("File updated successfully")],
                 stop_reason: StopReason::EndTurn,
@@ -394,18 +445,19 @@ async fn multi_turn_tool_chain() {
         .working_dir(&tmp_dir)
         .build();
 
-    let result = agent.run("update the file").await.unwrap();
+    let result = agent
+        .run(prompt("update the file"), CancellationToken::new())
+        .await
+        .unwrap();
     assert_eq!(result.text, "File updated successfully");
 
-    // Verify the file was actually edited
     let content = std::fs::read_to_string(&test_file).unwrap();
     assert_eq!(content, "hello agent");
 
-    // Cleanup
     let _ = std::fs::remove_dir_all(&tmp_dir);
 }
 
-// --- No tools configured: agent still works (text-only) ---
+// --- No tools configured ---
 
 #[tokio::test]
 async fn no_tools_text_only() {
@@ -415,7 +467,10 @@ async fn no_tools_text_only() {
         .working_dir(test_dir())
         .build();
 
-    let result = agent.run("hello").await.unwrap();
+    let result = agent
+        .run(prompt("hello"), CancellationToken::new())
+        .await
+        .unwrap();
     assert_eq!(result.text, "I have no tools but I can chat!");
 }
 
@@ -423,8 +478,7 @@ async fn no_tools_text_only() {
 
 #[tokio::test]
 async fn end_turn_stops_even_with_tool_use_content() {
-    // Edge case: stop_reason is EndTurn but content has tool_use
-    // The loop should respect stop_reason and stop.
+    // stop_reason is EndTurn but content has tool_use — loop honours stop_reason.
     let mock = Mock::new(|_req| {
         Ok(Response {
             content: vec![
@@ -435,7 +489,7 @@ async fn end_turn_stops_even_with_tool_use_content() {
                     input: json!({"command": "echo orphan"}),
                 },
             ],
-            stop_reason: StopReason::EndTurn, // stop despite tool_use
+            stop_reason: StopReason::EndTurn,
             usage: Usage::default(),
         })
     });
@@ -447,8 +501,60 @@ async fn end_turn_stops_even_with_tool_use_content() {
         .working_dir(test_dir())
         .build();
 
-    let result = agent.run("test").await.unwrap();
+    let result = agent
+        .run(prompt("test"), CancellationToken::new())
+        .await
+        .unwrap();
     assert_eq!(result.text, "Let me think...");
-    // Should be 2 messages: user + assistant (no tool execution)
-    assert_eq!(result.messages.len(), 2);
+    // Delta: 1 assistant message, no tool execution.
+    assert_eq!(result.new_messages.len(), 1);
+}
+
+// --- Provider error surfaces with partial ---
+
+#[tokio::test]
+async fn provider_error_returns_partial() {
+    let call = Arc::new(AtomicUsize::new(0));
+    let call_clone = call.clone();
+
+    let mock = Mock::new(move |_req| {
+        let n = call_clone.fetch_add(1, Ordering::SeqCst);
+        match n {
+            0 => Ok(Response {
+                content: vec![Content::ToolUse {
+                    id: "t1".into(),
+                    name: "bash".into(),
+                    input: json!({"command": "echo hi"}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: Usage {
+                    input_tokens: 10,
+                    output_tokens: 5,
+                },
+            }),
+            _ => Err(agent_runtime::ProviderError::Overloaded {
+                retry_after_ms: Some(2_000),
+            }),
+        }
+    });
+
+    let agent = Agent::builder()
+        .provider(mock)
+        .model("test")
+        .tools(agent_runtime::tools::defaults())
+        .working_dir(test_dir())
+        .build();
+
+    let err = agent
+        .run(prompt("test"), CancellationToken::new())
+        .await
+        .unwrap_err();
+
+    let AgentError::Provider { source, partial } = &err else {
+        panic!("expected Provider error, got {err:?}");
+    };
+    assert!(source.is_retryable());
+    // One full tool round-trip happened before the provider failed.
+    assert_eq!(partial.new_messages.len(), 2);
+    assert_eq!(partial.usage.input_tokens, 10);
 }

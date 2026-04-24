@@ -6,9 +6,13 @@
 
 use std::path::Path;
 
-use agent_runtime::message::Content;
+use agent_runtime::message::{Content, Message};
 use agent_runtime::providers::Anthropic;
-use agent_runtime::{Agent, AgentResult};
+use agent_runtime::{Agent, AgentResult, CancellationToken};
+
+fn prompt(text: &str) -> Vec<Message> {
+    vec![Message::user_text(text)]
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -46,7 +50,7 @@ fn sonnet_agent(working_dir: &Path) -> Agent {
 }
 
 fn assert_tool_called(result: &AgentResult, tool_name: &str) {
-    let called = result.messages.iter().any(|msg| {
+    let called = result.new_messages.iter().any(|msg| {
         msg.content
             .iter()
             .any(|c| matches!(c, Content::ToolUse { name, .. } if name == tool_name))
@@ -59,7 +63,7 @@ fn assert_tool_called(result: &AgentResult, tool_name: &str) {
 }
 
 fn assert_no_tool_errors(result: &AgentResult) {
-    for msg in &result.messages {
+    for msg in &result.new_messages {
         for content in &msg.content {
             if let Content::ToolResult {
                 is_error: true,
@@ -75,7 +79,7 @@ fn assert_no_tool_errors(result: &AgentResult) {
 
 fn collect_tool_calls(result: &AgentResult) -> Vec<String> {
     result
-        .messages
+        .new_messages
         .iter()
         .flat_map(|msg| msg.content.iter())
         .filter_map(|c| match c {
@@ -120,7 +124,10 @@ async fn smoke_provider_roundtrip() {
         .max_tokens(32)
         .build();
 
-    let result = agent.run("PING").await.unwrap();
+    let result = agent
+        .run(prompt("PING"), CancellationToken::new())
+        .await
+        .unwrap();
 
     assert!(!result.text.is_empty(), "Response should not be empty");
     assert!(
@@ -141,7 +148,10 @@ async fn smoke_agent_reads_file() {
 
     let agent = haiku_agent(&dir);
     let result = agent
-        .run("Read the file hello.txt and tell me the secret code.")
+        .run(
+            prompt("Read the file hello.txt and tell me the secret code."),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -162,7 +172,10 @@ async fn smoke_agent_runs_bash() {
 
     let agent = haiku_agent(&dir);
     let result = agent
-        .run("Run `echo 'hello_from_bash'` and tell me what it printed.")
+        .run(
+            prompt("Run `echo 'hello_from_bash'` and tell me what it printed."),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -183,7 +196,10 @@ async fn smoke_agent_writes_file() {
 
     let agent = haiku_agent(&dir);
     let result = agent
-        .run("Create a file called output.txt with the content 'agent was here'.")
+        .run(
+            prompt("Create a file called output.txt with the content 'agent was here'."),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -206,7 +222,10 @@ async fn smoke_agent_finds_files() {
 
     let agent = haiku_agent(&dir);
     let result = agent
-        .run("How many .rs files are in this directory? Use glob to find them.")
+        .run(
+            prompt("How many .rs files are in this directory? Use glob to find them."),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -233,7 +252,10 @@ async fn smoke_agent_greps() {
 
     let agent = haiku_agent(&dir);
     let result = agent
-        .run("Search for 'TODO_FIX' in the files here. Which file contains it?")
+        .run(
+            prompt("Search for 'TODO_FIX' in the files here. Which file contains it?"),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -263,7 +285,10 @@ async fn full_agent_edit_chain() {
 
     let agent = sonnet_agent(&dir);
     let result = agent
-        .run("Read config.toml, then change the port from 8080 to 9090.")
+        .run(
+            prompt("Read config.toml, then change the port from 8080 to 9090."),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -298,8 +323,11 @@ async fn full_agent_multi_tool_search() {
     let agent = sonnet_agent(&dir);
     let result = agent
         .run(
-            "Use the grep tool to search for the pattern 'async' in the src/ directory. \
-             Tell me which files contain it.",
+            prompt(
+                "Use the grep tool to search for the pattern 'async' in the src/ directory. \
+                 Tell me which files contain it.",
+            ),
+            CancellationToken::new(),
         )
         .await
         .unwrap();
@@ -328,8 +356,11 @@ async fn full_agent_sub_agent() {
     let agent = sonnet_agent(&dir);
     let result = agent
         .run(
-            "Use a sub-agent to read data.txt and report what it says. \
-             Pass this prompt to the agent tool: 'Read data.txt and return its contents.'",
+            prompt(
+                "Use a sub-agent to read data.txt and report what it says. \
+                 Pass this prompt to the agent tool: 'Read data.txt and return its contents.'",
+            ),
+            CancellationToken::new(),
         )
         .await
         .unwrap();
@@ -352,8 +383,11 @@ async fn full_agent_create_and_modify() {
     let agent = sonnet_agent(&dir);
     let result = agent
         .run(
-            "Create a file called hello.py with a function greet(name) that \
-             prints 'Hello, {name}!'. Then read it back to verify it's correct.",
+            prompt(
+                "Create a file called hello.py with a function greet(name) that \
+                 prints 'Hello, {name}!'. Then read it back to verify it's correct.",
+            ),
+            CancellationToken::new(),
         )
         .await
         .unwrap();

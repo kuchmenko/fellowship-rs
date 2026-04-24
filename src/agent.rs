@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::error::AgentError;
@@ -9,21 +10,39 @@ use crate::provider::{LlmProvider, Request, ToolDefinition};
 use crate::tool::{Tool, ToolContext};
 
 /// Result of an agent run.
-#[derive(Debug)]
+///
+/// The agent is stateless: it does **not** retain conversation history
+/// between calls. Callers pass in the full history each time and receive
+/// back only the **delta** of new messages the agent appended during this
+/// run (assistant responses + tool-result user messages).
+///
+/// Typical consumer pattern:
+///
+/// ```ignore
+/// let mut history = load_session();
+/// history.push(Message::user_text(input));
+/// let result = agent.run(history.clone(), cancel).await?;
+/// history.extend(result.new_messages);
+/// save_session(&history);
+/// ```
+#[derive(Debug, Clone)]
 pub struct AgentResult {
-    /// Full conversation history.
-    pub messages: Vec<Message>,
-    /// Final text output from the agent.
+    /// Messages appended by this run only — **not** the full history.
+    pub new_messages: Vec<Message>,
+    /// Final assistant text output.
     pub text: String,
-    /// Aggregated token usage across all turns.
+    /// Aggregated token usage across all turns in this run.
     pub usage: Usage,
+    /// Stop reason from the last provider response, or `Cancelled` if the
+    /// caller's `CancellationToken` fired.
+    pub stop_reason: StopReason,
 }
 
 /// The core agent runtime.
 ///
 /// Runs an LLM-driven tool loop: sends messages to the LLM, executes any
 /// requested tools, feeds results back, and repeats until the LLM produces
-/// a final text response or max turns are reached.
+/// a final text response, max turns are reached, or the caller cancels.
 pub struct Agent {
     provider: Arc<dyn LlmProvider>,
     model: String,
@@ -73,36 +92,71 @@ impl Agent {
             .map(|t| t.as_ref())
     }
 
-    /// Run the agent loop with the given prompt.
+    /// Run the agent loop against the given message history.
     ///
-    /// Returns the final result when the LLM produces a text response
-    /// without tool calls, or errors if max turns are exceeded.
-    pub async fn run(&self, prompt: &str) -> Result<AgentResult, AgentError> {
-        let mut messages = vec![Message::user_text(prompt)];
+    /// The agent is **stateless**: this method does not mutate `self` and
+    /// the caller owns the conversation. `messages` is the full history
+    /// (typically the prior session plus the new user message). The
+    /// returned [`AgentResult::new_messages`] is the delta — the caller
+    /// should extend their history with it to persist progress.
+    ///
+    /// `cancel` is a cooperative cancellation signal. The loop checks it
+    /// between turns and returns [`AgentError::Cancelled`] when it fires;
+    /// individual tools propagate it to long-running operations (added
+    /// in a later stage of this milestone).
+    ///
+    /// On any error, the [`AgentError::partial`] accessor returns the
+    /// progress accumulated up to the failure point, so the caller can
+    /// still persist what succeeded.
+    pub async fn run(
+        &self,
+        messages: Vec<Message>,
+        cancel: CancellationToken,
+    ) -> Result<AgentResult, AgentError> {
+        let mut history = messages;
+        let mut new_messages: Vec<Message> = Vec::new();
         let mut total_usage = Usage::default();
+        let mut last_stop = StopReason::EndTurn;
+
         let tool_defs = self.tool_definitions();
         let ctx = self.make_context();
 
         for turn in 0..self.max_turns {
             info!(turn, "agent turn");
 
+            if cancel.is_cancelled() {
+                return Err(AgentError::Cancelled {
+                    partial: build_partial(&new_messages, &total_usage, StopReason::Cancelled, ""),
+                });
+            }
+
             let request = Request {
                 model: self.model.clone(),
                 system: self.system.clone(),
-                messages: messages.clone(),
+                messages: history.clone(),
                 tools: tool_defs.clone(),
                 max_tokens: self.max_tokens,
                 temperature: self.temperature,
             };
 
-            let response = self.provider.complete(request).await?;
+            let response = match self.provider.complete(request).await {
+                Ok(r) => r,
+                Err(source) => {
+                    return Err(AgentError::Provider {
+                        source,
+                        partial: build_partial(&new_messages, &total_usage, last_stop, ""),
+                    });
+                }
+            };
 
             total_usage.input_tokens += response.usage.input_tokens;
             total_usage.output_tokens += response.usage.output_tokens;
+            last_stop = response.stop_reason;
 
-            messages.push(Message::assistant(response.content.clone()));
+            let assistant_msg = Message::assistant(response.content.clone());
+            history.push(assistant_msg.clone());
+            new_messages.push(assistant_msg);
 
-            // Collect tool calls
             let tool_calls: Vec<_> = response
                 .content
                 .iter()
@@ -115,25 +169,16 @@ impl Agent {
                 .collect();
 
             if tool_calls.is_empty() || response.stop_reason == StopReason::EndTurn {
-                let text = response
-                    .content
-                    .iter()
-                    .filter_map(|c| match c {
-                        Content::Text { text } => Some(text.as_str()),
-                        _ => None,
-                    })
-                    .collect::<Vec<_>>()
-                    .join("");
-
+                let text = extract_text(&response.content);
                 info!(turn, "agent finished");
                 return Ok(AgentResult {
-                    messages,
+                    new_messages,
                     text,
                     usage: total_usage,
+                    stop_reason: last_stop,
                 });
             }
 
-            // Execute tools sequentially
             let mut results = Vec::new();
             for (id, name, input) in &tool_calls {
                 match self.find_tool(name) {
@@ -164,11 +209,41 @@ impl Agent {
                 }
             }
 
-            messages.push(Message::user(results));
+            let user_msg = Message::user(results);
+            history.push(user_msg.clone());
+            new_messages.push(user_msg);
         }
 
-        Err(AgentError::MaxTurnsReached(self.max_turns))
+        Err(AgentError::MaxTurnsReached {
+            turns: self.max_turns,
+            partial: build_partial(&new_messages, &total_usage, last_stop, ""),
+        })
     }
+}
+
+fn build_partial(
+    new_messages: &[Message],
+    usage: &Usage,
+    stop_reason: StopReason,
+    text: &str,
+) -> AgentResult {
+    AgentResult {
+        new_messages: new_messages.to_vec(),
+        text: text.to_string(),
+        usage: usage.clone(),
+        stop_reason,
+    }
+}
+
+fn extract_text(content: &[Content]) -> String {
+    content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 // --- Builder ---

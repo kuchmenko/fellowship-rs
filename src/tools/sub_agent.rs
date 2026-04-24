@@ -1,8 +1,10 @@
 use async_trait::async_trait;
 use serde_json::{Value, json};
+use tokio_util::sync::CancellationToken;
 
 use crate::agent::Agent;
 use crate::error::ToolError;
+use crate::message::Message;
 use crate::tool::{Tool, ToolContext, ToolOutput};
 
 /// Spawn a sub-agent with its own system prompt and conversation.
@@ -87,7 +89,12 @@ impl Tool for SubAgent {
 
         let agent = builder.build();
 
-        match agent.run(prompt).await {
+        // Cancellation propagation lands in a later stage; for now the child
+        // uses a fresh, non-cancelled token so the old semantics are preserved.
+        let cancel = CancellationToken::new();
+        let child_history = vec![Message::user_text(prompt)];
+
+        match agent.run(child_history, cancel).await {
             Ok(result) => Ok(ToolOutput::text(result.text)),
             Err(e) => Ok(ToolOutput::error(format!("Sub-agent error: {e}"))),
         }
