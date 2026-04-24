@@ -231,6 +231,9 @@ fn convert_response(api: ApiResponse) -> Response {
         "end_turn" => StopReason::EndTurn,
         "tool_use" => StopReason::ToolUse,
         "max_tokens" => StopReason::MaxTokens,
+        "stop_sequence" => StopReason::StopSequence,
+        "pause_turn" => StopReason::PauseTurn,
+        // Unknown future values — don't guess; fall through to EndTurn.
         _ => StopReason::EndTurn,
     };
 

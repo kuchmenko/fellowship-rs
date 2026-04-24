@@ -36,12 +36,21 @@ pub enum Content {
     },
 }
 
+/// Reason the model stopped generating.
+///
+/// `EndTurn`, `ToolUse`, `MaxTokens`, `StopSequence`, `PauseTurn` are
+/// reported by the provider. `Cancelled` is runtime-only: it appears in
+/// [`crate::AgentResult::stop_reason`] on a partial result when the
+/// caller's `CancellationToken` fires. No provider ever returns it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum StopReason {
     EndTurn,
     ToolUse,
     MaxTokens,
+    StopSequence,
+    PauseTurn,
+    Cancelled,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
