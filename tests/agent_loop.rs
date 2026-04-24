@@ -510,6 +510,60 @@ async fn end_turn_stops_even_with_tool_use_content() {
     assert_eq!(result.new_messages.len(), 1);
 }
 
+// --- Cancel during tool batch: Bash honours it, loop returns Cancelled ---
+
+#[tokio::test]
+async fn cancel_during_bash_tool_returns_cancelled() {
+    let call = Arc::new(AtomicUsize::new(0));
+    let call_clone = call.clone();
+
+    let mock = Mock::new(move |_req| {
+        let n = call_clone.fetch_add(1, Ordering::SeqCst);
+        match n {
+            0 => Ok(Response {
+                content: vec![Content::ToolUse {
+                    id: "t1".into(),
+                    name: "bash".into(),
+                    // sleep longer than our cancel delay — bash honours
+                    // ctx.cancel via select! + kill_on_drop.
+                    input: json!({"command": "sleep 10", "timeout_ms": 30000}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: Usage::default(),
+            }),
+            _ => panic!("loop should not reach a second turn — cancel fired mid-batch"),
+        }
+    });
+
+    let agent = Agent::builder()
+        .provider(mock)
+        .model("test")
+        .tools(agent_runtime::tools::defaults())
+        .working_dir(test_dir())
+        .build();
+
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
+    tokio::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        cancel_clone.cancel();
+    });
+
+    let start = std::time::Instant::now();
+    let err = agent.run(prompt("sleep"), cancel).await.unwrap_err();
+    let elapsed = start.elapsed();
+
+    let AgentError::Cancelled { partial } = &err else {
+        panic!("expected Cancelled, got {err:?}");
+    };
+    assert_eq!(partial.stop_reason, StopReason::Cancelled);
+    // We didn't wait the full sleep 10s — bash should have been killed promptly.
+    assert!(
+        elapsed < std::time::Duration::from_secs(2),
+        "expected prompt cancel, took {elapsed:?}"
+    );
+}
+
 // --- Provider error surfaces with partial ---
 
 #[tokio::test]

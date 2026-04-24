@@ -3,14 +3,25 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use crate::error::ToolError;
 use crate::provider::LlmProvider;
 
 /// Context passed to every tool execution.
+///
+/// The `cancel` token is a cooperative cancellation signal. Long-running
+/// tools (shell commands, HTTP requests, recursive file walks, sub-agent
+/// loops) should `tokio::select!` on `cancel.cancelled()` alongside their
+/// main work and return [`ToolError::Cancelled`] promptly when it fires.
+/// The agent loop trusts this contract — it does not race tools at the
+/// outer level; it only checks the token between turns.
 pub struct ToolContext {
     /// Working directory for file operations.
     pub working_dir: PathBuf,
+
+    /// Cooperative cancellation signal. Tools should honour this.
+    pub cancel: CancellationToken,
 
     // --- Internal fields for sub-agent support ---
     pub(crate) provider: Arc<dyn LlmProvider>,

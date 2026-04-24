@@ -80,9 +80,10 @@ impl Agent {
         defs
     }
 
-    fn make_context(&self) -> ToolContext {
+    fn make_context(&self, cancel: CancellationToken) -> ToolContext {
         ToolContext {
             working_dir: self.working_dir.clone(),
+            cancel,
             provider: Arc::clone(&self.provider),
             model: self.model.clone(),
             max_turns: self.max_turns,
@@ -120,7 +121,7 @@ impl Agent {
         let mut last_stop = StopReason::EndTurn;
 
         let tool_defs = self.tool_definitions();
-        let ctx = self.make_context();
+        let ctx = self.make_context(cancel.clone());
 
         for turn in 0..self.max_turns {
             info!(turn, "agent turn");
@@ -188,6 +189,16 @@ impl Agent {
             let user_msg = Message::user(results);
             history.push(user_msg.clone());
             new_messages.push(user_msg);
+
+            // If cancel fired while tools were running, skip the next
+            // provider round-trip — cooperative tools have already returned
+            // Cancelled error results, and another LLM call would only be
+            // wasted tokens before the pre-turn check stops us anyway.
+            if cancel.is_cancelled() {
+                return Err(AgentError::Cancelled {
+                    partial: build_partial(&new_messages, &total_usage, StopReason::Cancelled, ""),
+                });
+            }
         }
 
         Err(AgentError::MaxTurnsReached {

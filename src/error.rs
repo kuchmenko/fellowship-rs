@@ -140,6 +140,12 @@ pub enum ToolError {
     #[error("invalid input: {0}")]
     InvalidInput(String),
 
+    /// The cooperative cancellation signal from [`crate::ToolContext::cancel`]
+    /// fired before the tool completed. Long-running tools must return this
+    /// rather than swallowing the signal or looping indefinitely.
+    #[error("cancelled")]
+    Cancelled,
+
     #[error("{0}")]
     Execution(String),
 }

@@ -222,6 +222,7 @@ mod tests {
     fn ctx() -> ToolContext {
         ToolContext {
             working_dir: PathBuf::from("/tmp"),
+            cancel: tokio_util::sync::CancellationToken::new(),
             provider: Arc::new(crate::providers::Mock::with_text("")),
             model: "m".into(),
             max_turns: 1,
