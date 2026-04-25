@@ -1,4 +1,4 @@
-# Releasing agent-runtime
+# Releasing fellowship-rs
 
 ## Versioning
 

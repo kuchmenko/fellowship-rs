@@ -32,8 +32,8 @@
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use agent_runtime::message::Content;
-use agent_runtime::{
+use fellowship::message::Content;
+use fellowship::{
     Agent, AgentError, AgentResult, CancellationToken, Message, StopReason, StreamEvent,
     providers::Anthropic,
 };
@@ -67,20 +67,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// outcome should be a clean `Ok` with `EndTurn`.
 async fn phase1_tool_failure(provider: &Arc<Anthropic>) -> Result<(), Box<dyn std::error::Error>> {
     // A path inside an empty scratch dir, guaranteed non-existent.
-    let dir = std::env::temp_dir().join("agent_runtime_streaming_resilience_phase1");
+    let dir = std::env::temp_dir().join("fellowship_streaming_resilience_phase1");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     let bogus = dir.join("does_not_exist_xyz_123.txt");
 
     let agent = Agent::builder()
-        .provider_arc(provider.clone() as Arc<dyn agent_runtime::LlmProvider>)
+        .provider_arc(provider.clone() as Arc<dyn fellowship::LlmProvider>)
         .model("claude-haiku-4-5-20251001")
         .system(
             "You are a concise assistant. Use tools when helpful. \
              If a tool fails, explain the failure briefly to the user \
              instead of retrying blindly.",
         )
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .max_turns(5)
         .max_tokens(512)
         .working_dir(&dir)
@@ -155,15 +155,15 @@ async fn phase1_tool_failure(provider: &Arc<Anthropic>) -> Result<(), Box<dyn st
 async fn phase2_cancel_during_tool(
     provider: &Arc<Anthropic>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = std::env::temp_dir().join("agent_runtime_streaming_resilience_phase2");
+    let dir = std::env::temp_dir().join("fellowship_streaming_resilience_phase2");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
 
     let agent = Agent::builder()
-        .provider_arc(provider.clone() as Arc<dyn agent_runtime::LlmProvider>)
+        .provider_arc(provider.clone() as Arc<dyn fellowship::LlmProvider>)
         .model("claude-haiku-4-5-20251001")
         .system("You are concise. Run shell commands as asked, exactly.")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .max_turns(2)
         .max_tokens(256)
         .working_dir(&dir)
@@ -247,13 +247,13 @@ async fn phase2_cancel_during_tool(
 /// somewhere in history (the multi-block case is exercised by any
 /// turn that mixes text and tools).
 async fn phase3_multi_block(provider: &Arc<Anthropic>) -> Result<(), Box<dyn std::error::Error>> {
-    let dir = std::env::temp_dir().join("agent_runtime_streaming_resilience_phase3");
+    let dir = std::env::temp_dir().join("fellowship_streaming_resilience_phase3");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     std::fs::write(dir.join("note.txt"), "The codeword is BANANA.")?;
 
     let agent = Agent::builder()
-        .provider_arc(provider.clone() as Arc<dyn agent_runtime::LlmProvider>)
+        .provider_arc(provider.clone() as Arc<dyn fellowship::LlmProvider>)
         // Sonnet is more likely than Haiku to narrate before acting.
         .model("claude-sonnet-4-6")
         .system(
@@ -261,7 +261,7 @@ async fn phase3_multi_block(provider: &Arc<Anthropic>) -> Result<(), Box<dyn std
              briefly state what you're about to do in one sentence \
              of plain text, THEN call the tool in the same response.",
         )
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .max_turns(3)
         .max_tokens(1024)
         .working_dir(&dir)

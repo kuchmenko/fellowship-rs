@@ -7,11 +7,11 @@
 use std::path::Path;
 use std::sync::{Arc, Once};
 
-use agent_runtime::message::{Content, Message};
-use agent_runtime::provider::Request;
-use agent_runtime::providers::{Anthropic, OpenAICompatible};
-use agent_runtime::tools::SubAgent;
-use agent_runtime::{Agent, AgentResult, CancellationToken, LlmProvider, StreamEvent};
+use fellowship::message::{Content, Message};
+use fellowship::provider::Request;
+use fellowship::providers::{Anthropic, OpenAICompatible};
+use fellowship::tools::SubAgent;
+use fellowship::{Agent, AgentResult, CancellationToken, LlmProvider, StreamEvent};
 use futures::StreamExt;
 
 /// Load `.env` once per test process. `cargo test` runs every `#[test]` on
@@ -46,7 +46,7 @@ fn haiku_agent(working_dir: &Path) -> Agent {
         .provider(require_api_key())
         .model("claude-haiku-4-5-20251001")
         .system("You are a concise assistant. Use tools when needed. Be brief.")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .max_turns(10)
         .max_tokens(1024)
         .working_dir(working_dir)
@@ -63,8 +63,8 @@ fn sonnet_agent(working_dir: &Path) -> Agent {
         .provider_arc(provider)
         .model("claude-sonnet-4-6")
         .system("You are a concise coding assistant. Use tools when needed. Be brief.")
-        .tools(agent_runtime::tools::defaults())
-        .tool(agent_runtime::tools::WebFetch)
+        .tools(fellowship::tools::defaults())
+        .tool(fellowship::tools::WebFetch)
         .tool(sub_agent)
         .max_turns(15)
         .max_tokens(4096)
@@ -124,7 +124,7 @@ fn assert_file_contains(path: &Path, expected: &str) {
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir()
-        .join("agent_runtime_integration")
+        .join("fellowship_integration")
         .join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();

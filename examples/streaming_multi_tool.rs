@@ -18,8 +18,8 @@
 
 use std::io::Write;
 
-use agent_runtime::message::Content;
-use agent_runtime::{Agent, CancellationToken, Message, StreamEvent, providers::Anthropic};
+use fellowship::message::Content;
+use fellowship::{Agent, CancellationToken, Message, StreamEvent, providers::Anthropic};
 use futures::StreamExt;
 
 #[tokio::main]
@@ -27,7 +27,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv_override();
 
     // Scratch dir for the file the agent creates.
-    let dir = std::env::temp_dir().join("agent_runtime_streaming_multi_tool");
+    let dir = std::env::temp_dir().join("fellowship_streaming_multi_tool");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     let target = dir.join("config.toml");
@@ -39,7 +39,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             "You are a concise assistant. Use tools when needed. \
              Never fabricate file contents — always verify by reading.",
         )
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .max_turns(8)
         .max_tokens(2048)
         .working_dir(&dir)

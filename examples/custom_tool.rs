@@ -1,4 +1,4 @@
-use agent_runtime::{
+use fellowship::{
     Agent, CancellationToken, Message, Tool, ToolContext, ToolError, ToolOutput, providers::Mock,
     tools,
 };
@@ -32,8 +32,8 @@ impl Tool for CurrentTime {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    use agent_runtime::message::{Content, StopReason, Usage};
-    use agent_runtime::provider::Response;
+    use fellowship::message::{Content, StopReason, Usage};
+    use fellowship::provider::Response;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
 

@@ -81,7 +81,7 @@ pub enum ToolClass {
 /// # Example
 ///
 /// ```ignore
-/// use agent_runtime::{Tool, ToolContext, ToolOutput, ToolError};
+/// use fellowship::{Tool, ToolContext, ToolOutput, ToolError};
 /// use serde_json::{json, Value};
 ///
 /// struct MyTool;

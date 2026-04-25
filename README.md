@@ -1,9 +1,11 @@
-# agent-runtime
+# fellowship
 
 A provider-independent agent runtime for Rust. Stateless agent loop, pluggable LLM providers, built-in file/shell tools, real SSE streaming, cooperative cancellation, and per-call approval gating.
 
-[![Crates.io](https://img.shields.io/crates/v/agent-runtime.svg)](https://crates.io/crates/agent-runtime)
-[![Docs.rs](https://img.shields.io/docsrs/agent-runtime)](https://docs.rs/agent-runtime)
+> Crate name on crates.io is **`fellowship-rs`** (the bare `fellowship` was already taken). Library name is `fellowship` — `use fellowship::Agent;` reads naturally.
+
+[![Crates.io](https://img.shields.io/crates/v/fellowship-rs.svg)](https://crates.io/crates/fellowship-rs)
+[![Docs.rs](https://img.shields.io/docsrs/fellowship-rs)](https://docs.rs/fellowship-rs)
 [![CI](https://github.com/kuchmenko/agent-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/kuchmenko/agent-runtime/actions/workflows/ci.yml)
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
@@ -22,12 +24,12 @@ LLM agent runtimes tend to either (a) bake in a single provider and hide the loo
 
 ```toml
 [dependencies]
-agent-runtime = "0.2"
+fellowship-rs = "0.2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```rust
-use agent_runtime::{Agent, CancellationToken, Message, providers::Anthropic, tools};
+use fellowship::{Agent, CancellationToken, Message, providers::Anthropic, tools};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -96,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
 ## Providers
 
 ```rust
-use agent_runtime::providers::{Anthropic, OpenAICompatible};
+use fellowship::providers::{Anthropic, OpenAICompatible};
 
 // Anthropic
 let p = Anthropic::from_env();   // ANTHROPIC_API_KEY
@@ -119,7 +121,7 @@ Implementing your own provider: implement `LlmProvider` (one `complete` and one 
 ## Streaming
 
 ```rust
-use agent_runtime::{Agent, CancellationToken, Message, StreamEvent};
+use fellowship::{Agent, CancellationToken, Message, StreamEvent};
 use futures::StreamExt;
 
 let mut stream = agent.stream(history, CancellationToken::new());
@@ -153,7 +155,7 @@ See [`examples/streaming_cancel.rs`](./examples/streaming_cancel.rs) for live ca
 ## Approval flow
 
 ```rust
-use agent_runtime::{ApprovalDecision, ApprovalHandler, ToolClass};
+use fellowship::{ApprovalDecision, ApprovalHandler, ToolClass};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -186,7 +188,7 @@ let agent = Agent::builder()
 ## Custom tools
 
 ```rust
-use agent_runtime::{Tool, ToolClass, ToolContext, ToolError, ToolOutput};
+use fellowship::{Tool, ToolClass, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
 
 struct CurrentTime;

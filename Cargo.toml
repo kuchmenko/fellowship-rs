@@ -1,10 +1,17 @@
 [package]
-name = "agent-runtime"
+name = "fellowship-rs"
 version = "0.2.0"
 edition = "2024"
 rust-version = "1.86.0"
 description = "A provider-independent agent runtime for Rust with built-in tools"
 license = "MIT"
+
+# Crate name on crates.io is `fellowship-rs` (the bare `fellowship`
+# name was already taken). The library import path stays clean —
+# `use fellowship::Agent;` — via the explicit lib name below.
+[lib]
+name = "fellowship"
+path = "src/lib.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

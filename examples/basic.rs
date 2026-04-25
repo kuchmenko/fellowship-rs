@@ -1,4 +1,4 @@
-use agent_runtime::{Agent, CancellationToken, Message, providers::Anthropic, tools};
+use fellowship::{Agent, CancellationToken, Message, providers::Anthropic, tools};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
