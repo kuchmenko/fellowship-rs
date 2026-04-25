@@ -146,6 +146,14 @@ impl ToolExecutor {
     /// Policy denial and missing-tool errors classify as `Mutating` so
     /// they serialise trivially as error `tool_result` content without
     /// affecting surrounding batches.
+    ///
+    /// Cancellation: before starting each new run (RO batch or single Mut
+    /// call), the executor checks `ctx.cancel.is_cancelled()`. If cancel
+    /// has fired, remaining calls receive a synthetic `is_error: true`
+    /// `tool_result` with body `Error: cancelled before execution` and
+    /// the batch returns. This preserves the 1:1 tool_use → tool_result
+    /// invariant the agent loop relies on, and stops mutating tools from
+    /// running after a cancel that arrived mid-batch.
     pub async fn execute_batch(&self, calls: Vec<ToolCall>, ctx: &ToolContext) -> Vec<Content> {
         if calls.is_empty() {
             return Vec::new();
@@ -157,6 +165,21 @@ impl ToolExecutor {
         let mut i = 0;
 
         while i < classes.len() {
+            // Don't START new tools after cancel — already-running tools
+            // in this batch will themselves observe ctx.cancel through
+            // their cooperative select! and return Cancelled errors. New
+            // tools must not begin work after the caller has aborted.
+            if ctx.cancel.is_cancelled() {
+                for call in calls_iter {
+                    results.push(Content::tool_result(
+                        &call.id,
+                        "Error: cancelled before execution".to_string(),
+                        true,
+                    ));
+                }
+                return results;
+            }
+
             let start = i;
             if classes[i] == ToolClass::ReadOnly {
                 while i < classes.len() && classes[i] == ToolClass::ReadOnly {
@@ -437,5 +460,91 @@ mod tests {
         assert_eq!(extract_text(&results[1]), "b");
         assert_eq!(extract_text(&results[2]), "m");
         assert_eq!(extract_text(&results[3]), "c");
+    }
+
+    /// A mutating tool that toggles a shared flag — used to detect whether
+    /// a tool ran. If `execute_batch` correctly stops dispatching after
+    /// cancel fires, the second mutating tool's flag stays unset.
+    struct FlagSetter(Arc<std::sync::atomic::AtomicBool>, &'static str);
+    #[async_trait]
+    impl Tool for FlagSetter {
+        fn name(&self) -> &str {
+            self.1
+        }
+        fn description(&self) -> &str {
+            "flag"
+        }
+        fn input_schema(&self) -> Value {
+            json!({})
+        }
+        async fn execute(
+            &self,
+            _input: Value,
+            _ctx: &ToolContext,
+        ) -> Result<ToolOutput, ToolError> {
+            self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(ToolOutput::text("ran"))
+        }
+    }
+
+    #[tokio::test]
+    async fn batch_stops_dispatching_after_cancel() {
+        let m1_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let m2_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        let reg = Arc::new(ToolRegistry::new(vec![
+            Arc::new(FlagSetter(Arc::clone(&m1_ran), "m1")),
+            Arc::new(FlagSetter(Arc::clone(&m2_ran), "m2")),
+        ]));
+        let exec = ToolExecutor::new(reg, Arc::new(AllowAll));
+
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ctx = ToolContext {
+            working_dir: PathBuf::from("/tmp"),
+            cancel: cancel.clone(),
+            depth: 0,
+            max_depth: 1,
+            executor: empty_executor(),
+        };
+
+        // Pre-cancel before invocation: NEITHER tool should run, both
+        // should produce synthetic cancelled errors.
+        cancel.cancel();
+        let calls = vec![
+            ToolCall {
+                id: "1".into(),
+                name: "m1".into(),
+                input: json!({}),
+            },
+            ToolCall {
+                id: "2".into(),
+                name: "m2".into(),
+                input: json!({}),
+            },
+        ];
+        let results = exec.execute_batch(calls, &ctx).await;
+
+        assert_eq!(results.len(), 2, "result count must match input count");
+        for r in &results {
+            let Content::ToolResult {
+                content, is_error, ..
+            } = r
+            else {
+                panic!("expected tool_result");
+            };
+            assert!(*is_error, "cancelled-before-execution should be is_error");
+            assert!(
+                content.contains("cancelled before execution"),
+                "got: {content}"
+            );
+        }
+        assert!(
+            !m1_ran.load(std::sync::atomic::Ordering::SeqCst),
+            "m1 must not have run after cancel"
+        );
+        assert!(
+            !m2_ran.load(std::sync::atomic::Ordering::SeqCst),
+            "m2 must not have run after cancel"
+        );
     }
 }

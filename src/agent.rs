@@ -187,6 +187,16 @@ impl Agent {
                 });
             }
 
+            // Cancellation can fire while `provider.complete` is in flight
+            // (a multi-second LLM call). The pre-turn check at the top of
+            // the loop misses this window. Bail out before invoking any
+            // tools so a cancelled run never starts new mutating work.
+            if cancel.is_cancelled() {
+                return Err(AgentError::Cancelled {
+                    partial: build_partial(&new_messages, &total_usage, StopReason::Cancelled, ""),
+                });
+            }
+
             debug!(count = tool_calls.len(), "executing tool batch");
             let results = self.executor.execute_batch(tool_calls, &ctx).await;
 
