@@ -356,7 +356,33 @@ impl Agent {
             let mut turn_stop: Option<StopReason> = None;
             let mut turn_usage = Usage::default();
 
-            while let Some(event) = provider_stream.next().await {
+            // Inner SSE loop. We cannot use `while let Some(event) =
+            // provider_stream.next().await` here because that blocks
+            // until the next SSE chunk arrives and gives the cancel
+            // token no chance to interrupt — a long generation would
+            // run to completion ignoring `cancel.cancel()`. Instead
+            // race each pull against the cancel future so external
+            // cancellation aborts immediately, dropping
+            // `provider_stream` (which closes the reqwest socket on
+            // drop, terminating the SSE upstream).
+            loop {
+                let event = tokio::select! {
+                    biased;
+                    _ = cancel.cancelled() => {
+                        return Err(AgentError::Cancelled {
+                            partial: build_partial(
+                                &new_messages,
+                                &total_usage,
+                                StopReason::Cancelled,
+                                &text_buf,
+                            ),
+                        });
+                    }
+                    next = provider_stream.next() => match next {
+                        Some(e) => e,
+                        None => break,
+                    },
+                };
                 let ev = match event {
                     Ok(ev) => ev,
                     Err(source) => {

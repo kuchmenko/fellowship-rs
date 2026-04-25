@@ -13,6 +13,8 @@ use futures::StreamExt;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = dotenvy::dotenv_override();
+
     let agent = Agent::builder()
         .provider(Anthropic::from_env())
         .model("claude-haiku-4-5-20251001")
