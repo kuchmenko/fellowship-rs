@@ -36,7 +36,12 @@ jobs:
         with:
           tool: clippy-sarif,sarif-fmt
       - name: Run clippy with SARIF output
+        # GitHub Actions runs multi-line `run:` via `bash -e` without
+        # pipefail. Without this, a non-zero `cargo clippy` exit is
+        # masked by the trailing `sarif-fmt` exiting 0, so lint failures
+        # silently pass CI. Force pipefail to propagate clippy errors.
         run: |
+          set -eo pipefail
           cargo clippy --all-targets --message-format=json \
             | clippy-sarif \
             | tee clippy.sarif \
