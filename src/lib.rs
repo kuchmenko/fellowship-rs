@@ -30,6 +30,7 @@
 //! ```
 
 pub mod agent;
+pub mod approval;
 pub mod error;
 pub mod executor;
 pub mod message;
@@ -41,6 +42,7 @@ pub mod tools;
 
 // Re-export core types at the crate root for convenience.
 pub use agent::{Agent, AgentBuilder, AgentResult, AgentStream};
+pub use approval::{ApprovalDecision, ApprovalHandler, AutoApprove};
 pub use error::{AgentError, ProviderError, ToolError};
 pub use executor::{AllowAll, ToolCall, ToolExecutor, ToolPolicy, ToolRegistry};
 pub use message::{Content, Message, Role, StopReason, Usage};
