@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use serde_json::{Value, json};
 
 use crate::error::ToolError;
-use crate::tool::{Tool, ToolContext, ToolOutput};
+use crate::tool::{Tool, ToolClass, ToolContext, ToolOutput};
 
 /// Fetch content from a URL.
 pub struct WebFetch;
@@ -11,6 +11,10 @@ pub struct WebFetch;
 impl Tool for WebFetch {
     fn name(&self) -> &str {
         "web_fetch"
+    }
+
+    fn class(&self) -> ToolClass {
+        ToolClass::ReadOnly
     }
 
     fn description(&self) -> &str {
@@ -36,7 +40,7 @@ impl Tool for WebFetch {
         })
     }
 
-    async fn execute(&self, input: Value, _ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
+    async fn execute(&self, input: Value, ctx: &ToolContext) -> Result<ToolOutput, ToolError> {
         let url = input["url"]
             .as_str()
             .ok_or_else(|| ToolError::InvalidInput("url is required".into()))?;
@@ -56,16 +60,22 @@ impl Tool for WebFetch {
             }
         }
 
-        let response = request
-            .send()
-            .await
-            .map_err(|e| ToolError::Execution(format!("HTTP request failed: {e}")))?;
+        // Dropping the in-flight send() future aborts the connection in
+        // reqwest/hyper, so select! on cancel gives us a prompt abort.
+        let response = tokio::select! {
+            biased;
+            _ = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+            resp = request.send() => resp
+                .map_err(|e| ToolError::Execution(format!("HTTP request failed: {e}")))?,
+        };
 
         let status = response.status().as_u16();
-        let body = response
-            .text()
-            .await
-            .map_err(|e| ToolError::Execution(format!("failed to read response body: {e}")))?;
+        let body = tokio::select! {
+            biased;
+            _ = ctx.cancel.cancelled() => return Err(ToolError::Cancelled),
+            body = response.text() => body
+                .map_err(|e| ToolError::Execution(format!("failed to read response body: {e}")))?,
+        };
 
         if status >= 400 {
             Ok(ToolOutput::error(format!("HTTP {status}\n{body}")))

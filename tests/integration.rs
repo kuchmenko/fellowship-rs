@@ -1,22 +1,41 @@
 // Integration tests that call real LLM APIs.
-// All tests are #[ignore] — they require ANTHROPIC_API_KEY env var.
+// All tests are #[ignore] so the default `cargo test` doesn't hit the network.
 //
-// Run locally:   ANTHROPIC_API_KEY=sk-... cargo test -- --ignored
-// Run in CI:     gh workflow run integration.yml -f tier=smoke
+// Local: `cargo test -- --ignored` (loads .env via dotenvy — see .env.example).
+// CI:    Actions → "Integration Tests" → Run workflow → tier=smoke|full.
 
 use std::path::Path;
+use std::sync::{Arc, Once};
 
-use agent_runtime::message::Content;
-use agent_runtime::providers::Anthropic;
-use agent_runtime::{Agent, AgentResult};
+use agent_runtime::message::{Content, Message};
+use agent_runtime::provider::Request;
+use agent_runtime::providers::{Anthropic, OpenAICompatible};
+use agent_runtime::tools::SubAgent;
+use agent_runtime::{Agent, AgentResult, CancellationToken, LlmProvider};
+
+/// Load `.env` once per test process. `cargo test` runs every `#[test]` on
+/// the same process by default, so the `Once` ensures a single load.
+/// Failure is silently ignored — env vars from the shell still take
+/// precedence and CI sets them directly.
+fn load_env() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = dotenvy::dotenv();
+    });
+}
+
+fn prompt(text: &str) -> Vec<Message> {
+    vec![Message::user_text(text)]
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 fn require_api_key() -> Anthropic {
+    load_env();
     if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        panic!("ANTHROPIC_API_KEY is required for integration tests");
+        panic!("ANTHROPIC_API_KEY is required for integration tests (set it in .env)");
     }
     Anthropic::from_env()
 }
@@ -34,11 +53,18 @@ fn haiku_agent(working_dir: &Path) -> Agent {
 }
 
 fn sonnet_agent(working_dir: &Path) -> Agent {
+    let provider: Arc<dyn LlmProvider> = Arc::new(require_api_key());
+    let sub_agent = SubAgent::new(Arc::clone(&provider), "claude-haiku-4-5-20251001")
+        .max_turns(10)
+        .max_tokens(2048);
+
     Agent::builder()
-        .provider(require_api_key())
+        .provider_arc(provider)
         .model("claude-sonnet-4-6")
         .system("You are a concise coding assistant. Use tools when needed. Be brief.")
-        .tools(agent_runtime::tools::all())
+        .tools(agent_runtime::tools::defaults())
+        .tool(agent_runtime::tools::WebFetch)
+        .tool(sub_agent)
         .max_turns(15)
         .max_tokens(4096)
         .working_dir(working_dir)
@@ -46,7 +72,7 @@ fn sonnet_agent(working_dir: &Path) -> Agent {
 }
 
 fn assert_tool_called(result: &AgentResult, tool_name: &str) {
-    let called = result.messages.iter().any(|msg| {
+    let called = result.new_messages.iter().any(|msg| {
         msg.content
             .iter()
             .any(|c| matches!(c, Content::ToolUse { name, .. } if name == tool_name))
@@ -59,7 +85,7 @@ fn assert_tool_called(result: &AgentResult, tool_name: &str) {
 }
 
 fn assert_no_tool_errors(result: &AgentResult) {
-    for msg in &result.messages {
+    for msg in &result.new_messages {
         for content in &msg.content {
             if let Content::ToolResult {
                 is_error: true,
@@ -75,7 +101,7 @@ fn assert_no_tool_errors(result: &AgentResult) {
 
 fn collect_tool_calls(result: &AgentResult) -> Vec<String> {
     result
-        .messages
+        .new_messages
         .iter()
         .flat_map(|msg| msg.content.iter())
         .filter_map(|c| match c {
@@ -120,7 +146,10 @@ async fn smoke_provider_roundtrip() {
         .max_tokens(32)
         .build();
 
-    let result = agent.run("PING").await.unwrap();
+    let result = agent
+        .run(prompt("PING"), CancellationToken::new())
+        .await
+        .unwrap();
 
     assert!(!result.text.is_empty(), "Response should not be empty");
     assert!(
@@ -141,7 +170,10 @@ async fn smoke_agent_reads_file() {
 
     let agent = haiku_agent(&dir);
     let result = agent
-        .run("Read the file hello.txt and tell me the secret code.")
+        .run(
+            prompt("Read the file hello.txt and tell me the secret code."),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -162,7 +194,10 @@ async fn smoke_agent_runs_bash() {
 
     let agent = haiku_agent(&dir);
     let result = agent
-        .run("Run `echo 'hello_from_bash'` and tell me what it printed.")
+        .run(
+            prompt("Run `echo 'hello_from_bash'` and tell me what it printed."),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -183,7 +218,10 @@ async fn smoke_agent_writes_file() {
 
     let agent = haiku_agent(&dir);
     let result = agent
-        .run("Create a file called output.txt with the content 'agent was here'.")
+        .run(
+            prompt("Create a file called output.txt with the content 'agent was here'."),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -206,7 +244,10 @@ async fn smoke_agent_finds_files() {
 
     let agent = haiku_agent(&dir);
     let result = agent
-        .run("How many .rs files are in this directory? Use glob to find them.")
+        .run(
+            prompt("How many .rs files are in this directory? Use glob to find them."),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -233,7 +274,10 @@ async fn smoke_agent_greps() {
 
     let agent = haiku_agent(&dir);
     let result = agent
-        .run("Search for 'TODO_FIX' in the files here. Which file contains it?")
+        .run(
+            prompt("Search for 'TODO_FIX' in the files here. Which file contains it?"),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -263,7 +307,10 @@ async fn full_agent_edit_chain() {
 
     let agent = sonnet_agent(&dir);
     let result = agent
-        .run("Read config.toml, then change the port from 8080 to 9090.")
+        .run(
+            prompt("Read config.toml, then change the port from 8080 to 9090."),
+            CancellationToken::new(),
+        )
         .await
         .unwrap();
 
@@ -298,8 +345,11 @@ async fn full_agent_multi_tool_search() {
     let agent = sonnet_agent(&dir);
     let result = agent
         .run(
-            "Use the grep tool to search for the pattern 'async' in the src/ directory. \
-             Tell me which files contain it.",
+            prompt(
+                "Use the grep tool to search for the pattern 'async' in the src/ directory. \
+                 Tell me which files contain it.",
+            ),
+            CancellationToken::new(),
         )
         .await
         .unwrap();
@@ -328,8 +378,11 @@ async fn full_agent_sub_agent() {
     let agent = sonnet_agent(&dir);
     let result = agent
         .run(
-            "Use a sub-agent to read data.txt and report what it says. \
-             Pass this prompt to the agent tool: 'Read data.txt and return its contents.'",
+            prompt(
+                "Use a sub-agent to read data.txt and report what it says. \
+                 Pass this prompt to the agent tool: 'Read data.txt and return its contents.'",
+            ),
+            CancellationToken::new(),
         )
         .await
         .unwrap();
@@ -352,8 +405,11 @@ async fn full_agent_create_and_modify() {
     let agent = sonnet_agent(&dir);
     let result = agent
         .run(
-            "Create a file called hello.py with a function greet(name) that \
-             prints 'Hello, {name}!'. Then read it back to verify it's correct.",
+            prompt(
+                "Create a file called hello.py with a function greet(name) that \
+                 prints 'Hello, {name}!'. Then read it back to verify it's correct.",
+            ),
+            CancellationToken::new(),
         )
         .await
         .unwrap();
@@ -366,4 +422,95 @@ async fn full_agent_create_and_modify() {
     assert!(py_file.exists(), "hello.py should have been created");
     assert_file_contains(&py_file, "greet");
     assert_file_contains(&py_file, "Hello");
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible provider smoke
+// ---------------------------------------------------------------------------
+
+/// Round-trip against any OpenAI-compatible endpoint to validate our
+/// `OpenAICompatible` provider end-to-end (request shape, tool_calls /
+/// finish_reason mapping, retry classification on real responses).
+///
+/// **Status: opportunistic.** This is a fully functional smoke — when
+/// `OPENAI_API_KEY` is set in the environment (or `.env`), it performs
+/// a real round-trip; when unset / empty / still the placeholder from
+/// `.env.example`, it skips with a printed reason. Drop a key into
+/// `.env` (or point at a local Ollama with
+/// `OPENAI_BASE_URL=http://localhost:11434/v1`, or OpenRouter via
+/// `OPENAI_BASE_URL=https://openrouter.ai/api/v1`) to enable.
+///
+/// TODO(openai): once a key/endpoint is provisioned in CI, add it to
+/// `.github/workflows/integration.yml` so `tier=smoke` exercises both
+/// providers, not just Anthropic.
+#[tokio::test]
+#[ignore]
+async fn smoke_openai_compatible_roundtrip() {
+    load_env();
+    // Skip if the var is unset, empty, or still the .env.example placeholder.
+    // Without these checks the provider would round-trip a bogus key into
+    // a 401 from the upstream and look like a real failure.
+    let api_key = match std::env::var("OPENAI_API_KEY") {
+        Ok(k) if !k.is_empty() && !k.starts_with("sk-...") => k,
+        _ => {
+            eprintln!(
+                "skipping smoke_openai_compatible_roundtrip: \
+                 OPENAI_API_KEY missing, empty, or still the placeholder"
+            );
+            return;
+        }
+    };
+
+    let base_url = std::env::var("OPENAI_BASE_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+    let model = std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+
+    let provider = OpenAICompatible::new(api_key).with_base_url(base_url);
+
+    // Hit the provider directly (no agent loop) for the tightest possible
+    // assertion on the wire bridge — system prompt routing, response
+    // decoding, finish_reason mapping. 256 tokens of headroom because
+    // some models (Kimi, reasoning Llamas) are chatty even when told to
+    // be brief; we don't want the assertion to fight model verbosity.
+    let request = Request {
+        model: model.clone(),
+        system: Some("Reply with exactly the single word: PONG".into()),
+        messages: vec![Message::user_text("PING")],
+        tools: vec![],
+        max_tokens: 256,
+        temperature: Some(0.0),
+    };
+
+    let response = provider
+        .complete(request)
+        .await
+        .expect("provider round-trip should succeed");
+
+    let text: String = response
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+
+    eprintln!(
+        "[smoke openai-compat | model={model}] stop={:?} \
+         in={} out={} text={text:?}",
+        response.stop_reason, response.usage.input_tokens, response.usage.output_tokens
+    );
+
+    assert!(response.usage.input_tokens > 0, "should have prompt tokens");
+    assert!(
+        response.usage.output_tokens > 0,
+        "should have completion tokens"
+    );
+    // Don't pin StopReason — different models legitimately stop on
+    // EndTurn, MaxTokens, or StopSequence. The semantic check is that
+    // the model said PONG somewhere in its output.
+    assert!(
+        text.to_uppercase().contains("PONG"),
+        "expected PONG in response, got: {text:?}"
+    );
 }

@@ -1,4 +1,4 @@
-use agent_runtime::{Agent, providers::Anthropic, tools};
+use agent_runtime::{Agent, CancellationToken, Message, providers::Anthropic, tools};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -11,9 +11,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tools(tools::defaults())
         .build();
 
-    let result = agent
-        .run("What files are in the current directory? List them.")
-        .await?;
+    let history = vec![Message::user_text(
+        "What files are in the current directory? List them.",
+    )];
+
+    let result = agent.run(history, CancellationToken::new()).await?;
 
     println!("{}", result.text);
     println!(

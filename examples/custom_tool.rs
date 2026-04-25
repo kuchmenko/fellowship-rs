@@ -1,4 +1,7 @@
-use agent_runtime::{Agent, Tool, ToolContext, ToolError, ToolOutput, providers::Mock, tools};
+use agent_runtime::{
+    Agent, CancellationToken, Message, Tool, ToolContext, ToolError, ToolOutput, providers::Mock,
+    tools,
+};
 use serde_json::{Value, json};
 
 /// Example: a custom tool that returns the current time.
@@ -66,9 +69,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .tools(tools::defaults())
         .build();
 
-    let result = agent.run("What time is it?").await?;
+    let history = vec![Message::user_text("What time is it?")];
+    let result = agent.run(history, CancellationToken::new()).await?;
     println!("Agent response: {}", result.text);
-    println!("Turns: {}", result.messages.len());
+    println!("Delta messages: {}", result.new_messages.len());
 
     Ok(())
 }

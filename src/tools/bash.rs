@@ -6,6 +6,10 @@ use crate::error::ToolError;
 use crate::tool::{Tool, ToolContext, ToolOutput};
 
 /// Execute shell commands.
+///
+/// Honours `ctx.cancel`: if the token fires mid-execution, the spawned
+/// child is dropped. Combined with `.kill_on_drop(true)`, that sends
+/// `SIGKILL` to the child process so the shell doesn't linger.
 pub struct Bash;
 
 #[async_trait]
@@ -42,48 +46,61 @@ impl Tool for Bash {
             .ok_or_else(|| ToolError::InvalidInput("command is required".into()))?;
         let timeout_ms = input["timeout_ms"].as_u64().unwrap_or(120_000);
 
-        let result = tokio::time::timeout(
-            std::time::Duration::from_millis(timeout_ms),
-            Command::new("bash")
-                .arg("-c")
-                .arg(command)
-                .current_dir(&ctx.working_dir)
-                .output(),
-        )
-        .await;
+        // kill_on_drop(true) ensures that dropping the spawned future (e.g.
+        // when cancel fires) actually terminates the child instead of
+        // leaking it behind the agent.
+        let output_fut = Command::new("bash")
+            .arg("-c")
+            .arg(command)
+            .current_dir(&ctx.working_dir)
+            .kill_on_drop(true)
+            .output();
 
-        match result {
-            Ok(Ok(output)) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
+        let timeout_fut =
+            tokio::time::timeout(std::time::Duration::from_millis(timeout_ms), output_fut);
 
-                let mut result = String::new();
-                if !stdout.is_empty() {
-                    result.push_str(&stdout);
-                }
-                if !stderr.is_empty() {
-                    if !result.is_empty() {
-                        result.push('\n');
-                    }
-                    result.push_str("[stderr]\n");
-                    result.push_str(&stderr);
-                }
-
-                if output.status.success() {
-                    Ok(ToolOutput::text(if result.is_empty() {
-                        "(no output)".to_string()
-                    } else {
-                        result
-                    }))
-                } else {
-                    let code = output.status.code().unwrap_or(-1);
-                    Ok(ToolOutput::error(format!("Exit code: {code}\n{result}")))
-                }
+        tokio::select! {
+            biased;
+            _ = ctx.cancel.cancelled() => {
+                // Dropping `timeout_fut` cascades into dropping the child,
+                // which — thanks to kill_on_drop — terminates the process.
+                Err(ToolError::Cancelled)
             }
-            Ok(Err(e)) => Err(ToolError::Io(e)),
-            Err(_) => Ok(ToolOutput::error(format!(
-                "Command timed out after {timeout_ms}ms"
-            ))),
+            result = timeout_fut => match result {
+                Ok(Ok(output)) => Ok(format_output(output)),
+                Ok(Err(e)) => Err(ToolError::Io(e)),
+                Err(_) => Ok(ToolOutput::error(format!(
+                    "Command timed out after {timeout_ms}ms"
+                ))),
+            },
         }
+    }
+}
+
+fn format_output(output: std::process::Output) -> ToolOutput {
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    let mut result = String::new();
+    if !stdout.is_empty() {
+        result.push_str(&stdout);
+    }
+    if !stderr.is_empty() {
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result.push_str("[stderr]\n");
+        result.push_str(&stderr);
+    }
+
+    if output.status.success() {
+        ToolOutput::text(if result.is_empty() {
+            "(no output)".to_string()
+        } else {
+            result
+        })
+    } else {
+        let code = output.status.code().unwrap_or(-1);
+        ToolOutput::error(format!("Exit code: {code}\n{result}"))
     }
 }
