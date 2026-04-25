@@ -11,6 +11,7 @@ use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::approval::{ApprovalHandler, AutoApprove};
 use crate::error::{AgentError, ProviderError};
 use crate::executor::{AllowAll, ToolCall, ToolExecutor, ToolPolicy, ToolRegistry};
 use crate::message::{Content, Message, StopReason, Usage};
@@ -445,6 +446,10 @@ impl Agent {
                         turn_usage.output_tokens = turn_usage.output_tokens.max(u.output_tokens);
                     }
                     StreamEvent::Done => break,
+                    // ToolCallPending is an agent-emitted event and
+                    // should never arrive from a provider's stream.
+                    // Ignore defensively if a buggy provider injects it.
+                    StreamEvent::ToolCallPending { .. } => {}
                 }
             }
             // Drop provider_stream to free the underlying HTTP
@@ -500,6 +505,39 @@ impl Agent {
                 .into_iter()
                 .map(|(id, name, input)| ToolCall { id, name, input })
                 .collect();
+
+            // Emit one `ToolCallPending` per call before invoking the
+            // executor. The consumer's UI uses this to render an
+            // "approval pending" prompt while the executor's
+            // `ApprovalHandler::approve` blocks on user input.
+            // Class is resolved through the registry; a missing tool
+            // (LLM hallucinated a name) falls back to Mutating —
+            // safer default for unknown tools.
+            for call in &calls {
+                let class = self
+                    .executor
+                    .registry()
+                    .get(&call.name)
+                    .map(|t| t.class())
+                    .unwrap_or(crate::tool::ToolClass::Mutating);
+                let event = StreamEvent::ToolCallPending {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    input: call.input.clone(),
+                    class,
+                };
+                if events_tx.send(Ok(event)).await.is_err() {
+                    return Err(AgentError::Cancelled {
+                        partial: build_partial(
+                            &new_messages,
+                            &total_usage,
+                            StopReason::Cancelled,
+                            &text_buf,
+                        ),
+                    });
+                }
+            }
+
             let results = self.executor.execute_batch(calls, &ctx).await;
             let user_msg = Message::user(results);
             history.push(user_msg.clone());
@@ -629,6 +667,7 @@ pub struct AgentBuilder {
     system: Option<String>,
     tools: Vec<Arc<dyn Tool>>,
     policy: Option<Arc<dyn ToolPolicy>>,
+    approval: Option<Arc<dyn ApprovalHandler>>,
     executor_override: Option<Arc<ToolExecutor>>,
     max_turns: usize,
     max_tokens: u32,
@@ -646,6 +685,7 @@ impl AgentBuilder {
             system: None,
             tools: Vec::new(),
             policy: None,
+            approval: None,
             executor_override: None,
             max_turns: 50,
             max_tokens: 16384,
@@ -697,6 +737,20 @@ impl AgentBuilder {
         self
     }
 
+    /// Install a per-call approval handler. Without this,
+    /// [`AutoApprove`](crate::AutoApprove) is used (every call allowed).
+    /// The handler runs after [`ToolPolicy::is_allowed`] succeeds and
+    /// before the tool actually executes; denials surface to the model
+    /// as `is_error: true` tool_results so the LLM can adapt.
+    ///
+    /// Sub-agents inherit this handler automatically through their
+    /// shared [`ToolExecutor`] (Model 3): one handler gates the whole
+    /// agent tree.
+    pub fn approval(mut self, approval: impl ApprovalHandler + 'static) -> Self {
+        self.approval = Some(Arc::new(approval));
+        self
+    }
+
     /// Re-use an existing [`ToolExecutor`] instead of building one from
     /// the `tools` + `policy` accumulated in the builder. Intended for
     /// sub-agent spawning, where the child inherits the parent's full
@@ -743,7 +797,9 @@ impl AgentBuilder {
         let executor = self.executor_override.unwrap_or_else(|| {
             let registry = Arc::new(ToolRegistry::new(self.tools));
             let policy: Arc<dyn ToolPolicy> = self.policy.unwrap_or_else(|| Arc::new(AllowAll));
-            Arc::new(ToolExecutor::new(registry, policy))
+            let approval: Arc<dyn ApprovalHandler> =
+                self.approval.unwrap_or_else(|| Arc::new(AutoApprove));
+            Arc::new(ToolExecutor::with_approval(registry, policy, approval))
         });
 
         Agent {

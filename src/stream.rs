@@ -19,6 +19,7 @@ use serde_json::Value;
 
 use crate::error::ProviderError;
 use crate::message::{StopReason, Usage};
+use crate::tool::ToolClass;
 
 /// One unit of progress from a streaming provider.
 ///
@@ -40,6 +41,29 @@ pub enum StreamEvent {
         id: String,
         name: String,
         input: Value,
+    },
+
+    /// **Agent-level event** (not emitted by providers).
+    ///
+    /// Fired by `Agent::stream` after a `ToolUse` has been received and
+    /// the model's turn has ended, **before** the executor's
+    /// approval/policy gates run. Lets the consumer's UI render a
+    /// "tool waiting for approval" prompt while
+    /// [`ApprovalHandler::approve`](crate::ApprovalHandler::approve)
+    /// blocks on user input.
+    ///
+    /// Order per tool call: `ToolUse{...}` → `ToolCallPending{...}`
+    /// → handler returns Allow/Deny → tool runs (or denial result
+    /// lands in next user turn). The actual decision flows through
+    /// `ApprovalHandler`, not through this event.
+    ///
+    /// Only emitted by streaming runs; `Agent::run` (buffered) reaches
+    /// the user only via the handler's blocking `approve()` call.
+    ToolCallPending {
+        id: String,
+        name: String,
+        input: Value,
+        class: ToolClass,
     },
 
     /// Final stop reason from the provider for this turn.
