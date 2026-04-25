@@ -505,6 +505,39 @@ impl Agent {
                 .into_iter()
                 .map(|(id, name, input)| ToolCall { id, name, input })
                 .collect();
+
+            // Emit one `ToolCallPending` per call before invoking the
+            // executor. The consumer's UI uses this to render an
+            // "approval pending" prompt while the executor's
+            // `ApprovalHandler::approve` blocks on user input.
+            // Class is resolved through the registry; a missing tool
+            // (LLM hallucinated a name) falls back to Mutating —
+            // safer default for unknown tools.
+            for call in &calls {
+                let class = self
+                    .executor
+                    .registry()
+                    .get(&call.name)
+                    .map(|t| t.class())
+                    .unwrap_or(crate::tool::ToolClass::Mutating);
+                let event = StreamEvent::ToolCallPending {
+                    id: call.id.clone(),
+                    name: call.name.clone(),
+                    input: call.input.clone(),
+                    class,
+                };
+                if events_tx.send(Ok(event)).await.is_err() {
+                    return Err(AgentError::Cancelled {
+                        partial: build_partial(
+                            &new_messages,
+                            &total_usage,
+                            StopReason::Cancelled,
+                            &text_buf,
+                        ),
+                    });
+                }
+            }
+
             let results = self.executor.execute_batch(calls, &ctx).await;
             let user_msg = Message::user(results);
             history.push(user_msg.clone());

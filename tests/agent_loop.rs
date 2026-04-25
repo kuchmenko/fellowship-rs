@@ -739,3 +739,158 @@ async fn stream_cancel_before_start_returns_cancelled_via_into_result() {
     assert_eq!(partial.stop_reason, StopReason::Cancelled);
     assert!(partial.new_messages.is_empty());
 }
+
+// --- Approval flow streaming events -----------------------------------------
+
+#[tokio::test]
+async fn stream_emits_tool_call_pending_before_executing_tool() {
+    use agent_runtime::ToolClass;
+
+    let call = Arc::new(AtomicUsize::new(0));
+    let call_clone = call.clone();
+
+    let mock = Mock::new(move |_req| {
+        let n = call_clone.fetch_add(1, Ordering::SeqCst);
+        match n {
+            0 => Ok(Response {
+                content: vec![Content::ToolUse {
+                    id: "t1".into(),
+                    name: "bash".into(),
+                    input: json!({"command": "echo hi"}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: Usage::default(),
+            }),
+            _ => Ok(Response {
+                content: vec![Content::text("done")],
+                stop_reason: StopReason::EndTurn,
+                usage: Usage::default(),
+            }),
+        }
+    });
+
+    let agent = Agent::builder()
+        .provider(mock)
+        .model("test")
+        .tools(agent_runtime::tools::defaults())
+        .working_dir(test_dir())
+        .build();
+
+    let mut stream = agent.stream(prompt("run echo"), CancellationToken::new());
+    let mut sequence: Vec<&'static str> = Vec::new();
+    let mut pending_class: Option<ToolClass> = None;
+    while let Some(ev) = stream.next().await {
+        match ev.unwrap() {
+            StreamEvent::ToolUse { .. } => sequence.push("ToolUse"),
+            StreamEvent::ToolCallPending { name, class, .. } => {
+                assert_eq!(name, "bash");
+                pending_class = Some(class);
+                sequence.push("ToolCallPending");
+            }
+            StreamEvent::ContentDelta(_) => sequence.push("ContentDelta"),
+            _ => {}
+        }
+    }
+    let result = stream.into_result().await.unwrap();
+
+    // Critical ordering invariant: ToolUse arrives first (provider
+    // event), then the agent emits ToolCallPending right before
+    // dispatching to the executor (where approval gate runs).
+    let tu_pos = sequence
+        .iter()
+        .position(|x| *x == "ToolUse")
+        .expect("ToolUse");
+    let pending_pos = sequence
+        .iter()
+        .position(|x| *x == "ToolCallPending")
+        .expect("ToolCallPending");
+    assert!(
+        tu_pos < pending_pos,
+        "ToolUse must come before ToolCallPending; got: {sequence:?}"
+    );
+
+    // Class is resolved through the registry.
+    assert_eq!(
+        pending_class,
+        Some(ToolClass::Mutating),
+        "bash is Mutating; class should be threaded through"
+    );
+
+    // Tool still ran end-to-end (AutoApprove default).
+    assert_eq!(result.text, "done");
+}
+
+#[tokio::test]
+async fn stream_with_deny_handler_emits_pending_but_skips_execution() {
+    use agent_runtime::{ApprovalDecision, ApprovalHandler, ToolClass};
+    use async_trait::async_trait;
+    use serde_json::Value;
+
+    struct DenyAll;
+    #[async_trait]
+    impl ApprovalHandler for DenyAll {
+        async fn approve(&self, _: &str, _: &Value, _: ToolClass) -> ApprovalDecision {
+            ApprovalDecision::Deny("nope".into())
+        }
+    }
+
+    let call = Arc::new(AtomicUsize::new(0));
+    let call_clone = call.clone();
+
+    let mock = Mock::new(move |_req| {
+        let n = call_clone.fetch_add(1, Ordering::SeqCst);
+        match n {
+            0 => Ok(Response {
+                content: vec![Content::ToolUse {
+                    id: "t1".into(),
+                    name: "bash".into(),
+                    input: json!({"command": "echo hi"}),
+                }],
+                stop_reason: StopReason::ToolUse,
+                usage: Usage::default(),
+            }),
+            _ => Ok(Response {
+                content: vec![Content::text("acknowledged the denial")],
+                stop_reason: StopReason::EndTurn,
+                usage: Usage::default(),
+            }),
+        }
+    });
+
+    let agent = Agent::builder()
+        .provider(mock)
+        .model("test")
+        .tools(agent_runtime::tools::defaults())
+        .approval(DenyAll)
+        .working_dir(test_dir())
+        .build();
+
+    let mut stream = agent.stream(prompt("run echo hi"), CancellationToken::new());
+    let mut got_pending = false;
+    while let Some(ev) = stream.next().await {
+        if let StreamEvent::ToolCallPending { .. } = ev.unwrap() {
+            got_pending = true;
+        }
+    }
+    let result = stream.into_result().await.unwrap();
+
+    assert!(
+        got_pending,
+        "ToolCallPending must still fire even when handler will deny"
+    );
+
+    // Tool result in history must carry the denial reason — proves
+    // the executor's gate ran and the model saw the rejection.
+    let saw_denial = result.new_messages.iter().any(|m| {
+        m.content.iter().any(|c| match c {
+            Content::ToolResult {
+                content, is_error, ..
+            } => *is_error && content.contains("nope"),
+            _ => false,
+        })
+    });
+    assert!(
+        saw_denial,
+        "expected denial tool_result containing 'nope' in history"
+    );
+}
