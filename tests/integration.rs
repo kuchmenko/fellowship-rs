@@ -1,17 +1,28 @@
 // Integration tests that call real LLM APIs.
-// All tests are #[ignore] — they require ANTHROPIC_API_KEY env var.
+// All tests are #[ignore] so the default `cargo test` doesn't hit the network.
 //
-// Run locally:   ANTHROPIC_API_KEY=sk-... cargo test -- --ignored
-// Run in CI:     gh workflow run integration.yml -f tier=smoke
+// Local: `cargo test -- --ignored` (loads .env via dotenvy — see .env.example).
+// CI:    Actions → "Integration Tests" → Run workflow → tier=smoke|full.
 
 use std::path::Path;
+use std::sync::{Arc, Once};
 
-use std::sync::Arc;
-
-use agent_runtime::message::{Content, Message};
-use agent_runtime::providers::Anthropic;
+use agent_runtime::message::{Content, Message, StopReason};
+use agent_runtime::provider::Request;
+use agent_runtime::providers::{Anthropic, OpenAICompatible};
 use agent_runtime::tools::SubAgent;
 use agent_runtime::{Agent, AgentResult, CancellationToken, LlmProvider};
+
+/// Load `.env` once per test process. `cargo test` runs every `#[test]` on
+/// the same process by default, so the `Once` ensures a single load.
+/// Failure is silently ignored — env vars from the shell still take
+/// precedence and CI sets them directly.
+fn load_env() {
+    static ONCE: Once = Once::new();
+    ONCE.call_once(|| {
+        let _ = dotenvy::dotenv();
+    });
+}
 
 fn prompt(text: &str) -> Vec<Message> {
     vec![Message::user_text(text)]
@@ -22,8 +33,9 @@ fn prompt(text: &str) -> Vec<Message> {
 // ---------------------------------------------------------------------------
 
 fn require_api_key() -> Anthropic {
+    load_env();
     if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        panic!("ANTHROPIC_API_KEY is required for integration tests");
+        panic!("ANTHROPIC_API_KEY is required for integration tests (set it in .env)");
     }
     Anthropic::from_env()
 }
@@ -410,4 +422,73 @@ async fn full_agent_create_and_modify() {
     assert!(py_file.exists(), "hello.py should have been created");
     assert_file_contains(&py_file, "greet");
     assert_file_contains(&py_file, "Hello");
+}
+
+// ---------------------------------------------------------------------------
+// OpenAI-compatible provider smoke
+// ---------------------------------------------------------------------------
+
+/// Round-trip against any OpenAI-compatible endpoint to validate our
+/// `OpenAICompatible` provider end-to-end (request shape, tool_calls /
+/// finish_reason mapping, retry classification on real responses).
+///
+/// **Status: stub.** The repo doesn't currently have an `OPENAI_API_KEY`
+/// or compat endpoint provisioned, so this is gracefully skipped when
+/// the env var is missing. Drop a key into `.env` (or point at a local
+/// Ollama with `OPENAI_BASE_URL=http://localhost:11434/v1`) to enable.
+///
+/// TODO(openai): once a key/endpoint is available, also add this to
+/// `.github/workflows/integration.yml` so `tier=smoke` exercises both
+/// providers, not just Anthropic.
+#[tokio::test]
+#[ignore]
+async fn smoke_openai_compatible_roundtrip() {
+    load_env();
+    let Ok(api_key) = std::env::var("OPENAI_API_KEY") else {
+        eprintln!("skipping smoke_openai_compatible_roundtrip: OPENAI_API_KEY not set");
+        return;
+    };
+
+    let base_url = std::env::var("OPENAI_BASE_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+    let model = std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+
+    let provider = OpenAICompatible::new(api_key).with_base_url(base_url);
+
+    // Hit the provider directly (no agent loop) for the tightest possible
+    // assertion on the wire bridge — system prompt routing, response
+    // decoding, finish_reason mapping.
+    let request = Request {
+        model: model.clone(),
+        system: Some("Reply with exactly: PONG".into()),
+        messages: vec![Message::user_text("PING")],
+        tools: vec![],
+        max_tokens: 32,
+        temperature: Some(0.0),
+    };
+
+    let response = provider
+        .complete(request)
+        .await
+        .expect("provider round-trip should succeed");
+
+    assert_eq!(response.stop_reason, StopReason::EndTurn);
+    assert!(response.usage.input_tokens > 0, "should have prompt tokens");
+    assert!(
+        response.usage.output_tokens > 0,
+        "should have completion tokens"
+    );
+
+    let text: String = response
+        .content
+        .iter()
+        .filter_map(|c| match c {
+            Content::Text { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        text.to_uppercase().contains("PONG"),
+        "expected PONG in response, got: {text:?}"
+    );
 }
