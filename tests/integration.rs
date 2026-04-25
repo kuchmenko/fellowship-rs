@@ -432,12 +432,15 @@ async fn full_agent_create_and_modify() {
 /// `OpenAICompatible` provider end-to-end (request shape, tool_calls /
 /// finish_reason mapping, retry classification on real responses).
 ///
-/// **Status: stub.** The repo doesn't currently have an `OPENAI_API_KEY`
-/// or compat endpoint provisioned, so this is gracefully skipped when
-/// the env var is missing. Drop a key into `.env` (or point at a local
-/// Ollama with `OPENAI_BASE_URL=http://localhost:11434/v1`) to enable.
+/// **Status: opportunistic.** This is a fully functional smoke — when
+/// `OPENAI_API_KEY` is set in the environment (or `.env`), it performs
+/// a real round-trip; when unset / empty / still the placeholder from
+/// `.env.example`, it skips with a printed reason. Drop a key into
+/// `.env` (or point at a local Ollama with
+/// `OPENAI_BASE_URL=http://localhost:11434/v1`, or OpenRouter via
+/// `OPENAI_BASE_URL=https://openrouter.ai/api/v1`) to enable.
 ///
-/// TODO(openai): once a key/endpoint is available, also add this to
+/// TODO(openai): once a key/endpoint is provisioned in CI, add it to
 /// `.github/workflows/integration.yml` so `tier=smoke` exercises both
 /// providers, not just Anthropic.
 #[tokio::test]

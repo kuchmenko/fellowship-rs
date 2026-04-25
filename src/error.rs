@@ -11,12 +11,12 @@ use crate::agent::AgentResult;
 /// history (the stateless-agent contract) can persist progress on error:
 ///
 /// ```ignore
-/// match agent.run(history.clone(), cancel).await {
-///     Ok(result) | Err(e) => {
-///         history.extend(result_or_partial(e).new_messages);
-///         save_session(&history);
-///     }
-/// }
+/// let delta = match agent.run(history.clone(), cancel).await {
+///     Ok(result) => result,
+///     Err(e) => e.into_partial(),
+/// };
+/// history.extend(delta.new_messages);
+/// save_session(&history);
 /// ```
 #[derive(Debug, Error)]
 pub enum AgentError {

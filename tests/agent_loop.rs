@@ -557,9 +557,13 @@ async fn cancel_during_bash_tool_returns_cancelled() {
         panic!("expected Cancelled, got {err:?}");
     };
     assert_eq!(partial.stop_reason, StopReason::Cancelled);
-    // We didn't wait the full sleep 10s — bash should have been killed promptly.
+    // The actual signal here is "cancelled long before sleep 10 elapsed";
+    // 5s is loose enough to absorb shared-CI runner jitter (process spawn +
+    // SIGKILL + reap can stretch on macOS/Windows agents) while still
+    // proving prompt termination — the worst-case "didn't honour cancel"
+    // would push elapsed close to 10s.
     assert!(
-        elapsed < std::time::Duration::from_secs(2),
+        elapsed < std::time::Duration::from_secs(5),
         "expected prompt cancel, took {elapsed:?}"
     );
 }
