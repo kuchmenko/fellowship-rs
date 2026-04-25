@@ -584,3 +584,62 @@ async fn smoke_anthropic_stream_roundtrip() {
         "expected PONG in assembled text, got: {text:?}"
     );
 }
+
+/// Streams a PING/PONG response through any OpenAI-compatible endpoint.
+/// Same opportunistic-skip semantics as the non-streaming OpenAI smoke.
+#[tokio::test]
+#[ignore]
+async fn smoke_openai_compatible_stream_roundtrip() {
+    load_env();
+    let api_key = match std::env::var("OPENAI_API_KEY") {
+        Ok(k) if !k.is_empty() && !k.starts_with("sk-...") => k,
+        _ => {
+            eprintln!(
+                "skipping smoke_openai_compatible_stream_roundtrip: \
+                 OPENAI_API_KEY missing, empty, or still the placeholder"
+            );
+            return;
+        }
+    };
+
+    let base_url = std::env::var("OPENAI_BASE_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+    let model = std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+
+    let provider = OpenAICompatible::new(api_key).with_base_url(base_url);
+
+    let request = Request {
+        model: model.clone(),
+        system: Some("Reply with exactly the single word: PONG".into()),
+        messages: vec![Message::user_text("PING")],
+        tools: vec![],
+        max_tokens: 256,
+        temperature: Some(0.0),
+    };
+
+    let mut stream = provider.stream(request).await.expect("open stream");
+    let mut text = String::new();
+    let mut delta_count = 0usize;
+    let mut got_done = false;
+
+    while let Some(event) = stream.next().await {
+        match event.expect("event ok") {
+            StreamEvent::ContentDelta(t) => {
+                delta_count += 1;
+                text.push_str(&t);
+            }
+            StreamEvent::ToolUse { .. } => panic!("no tools in this prompt"),
+            StreamEvent::Done => got_done = true,
+            _ => {}
+        }
+    }
+
+    eprintln!("[smoke openai-compat stream | model={model}] deltas={delta_count} text={text:?}");
+
+    assert!(got_done, "should have received Done terminal");
+    assert!(delta_count >= 1, "should have received at least one delta");
+    assert!(
+        text.to_uppercase().contains("PONG"),
+        "expected PONG in assembled text, got: {text:?}"
+    );
+}
