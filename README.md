@@ -6,7 +6,7 @@ A provider-independent agent runtime for Rust. Stateless agent loop, pluggable L
 
 [![Crates.io](https://img.shields.io/crates/v/fellowship-rs.svg)](https://crates.io/crates/fellowship-rs)
 [![Docs.rs](https://img.shields.io/docsrs/fellowship-rs)](https://docs.rs/fellowship-rs)
-[![CI](https://github.com/kuchmenko/agent-runtime/actions/workflows/ci.yml/badge.svg)](https://github.com/kuchmenko/agent-runtime/actions/workflows/ci.yml)
+[![CI](https://github.com/kuchmenko/fellowship-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/kuchmenko/fellowship-rs/actions/workflows/ci.yml)
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 > **Status:** pre-1.0 (`0.2.0`). Breaking changes are signalled via `feat!:` conventional commits and recorded in [`CHANGELOG.md`](./CHANGELOG.md). The core API just stabilised across three milestones — foundation, streaming, approval — and is settling, but expect motion.

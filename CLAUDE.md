@@ -6,9 +6,10 @@ The crate is published on crates.io as `fellowship-rs` because the bare
 `fellowship` name was taken. Inside Rust code it imports as `fellowship`
 (via `[lib] name = "fellowship"` in Cargo.toml).
 
-The repository is still `kuchmenko/agent-runtime` on GitHub — keeping
-the URL stable; the library was renamed mid-life so old git-history
-links keep working.
+The repository is `kuchmenko/fellowship-rs` on GitHub. It was renamed
+from `kuchmenko/agent-runtime` on 2026-04-26; GitHub keeps an automatic
+redirect from the old URL, so any pre-rename links in commit messages,
+issues, and CHANGELOG.md continue to resolve.
 
 ## Architecture
 
