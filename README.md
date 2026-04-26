@@ -1,15 +1,15 @@
-# fellowship
+# tkach
 
 A provider-independent agent runtime for Rust. Stateless agent loop, pluggable LLM providers, built-in file/shell tools, real SSE streaming, cooperative cancellation, and per-call approval gating.
 
-> Crate name on crates.io is **`fellowship-rs`** (the bare `fellowship` was already taken). Library name is `fellowship` — `use fellowship::Agent;` reads naturally.
+> `tkach` (ткач) is Russian for *weaver*. The runtime weaves provider calls, tool dispatch, approval gating, and cancellation into a single agent loop.
 
-[![Crates.io](https://img.shields.io/crates/v/fellowship-rs.svg)](https://crates.io/crates/fellowship-rs)
-[![Docs.rs](https://img.shields.io/docsrs/fellowship-rs)](https://docs.rs/fellowship-rs)
-[![CI](https://github.com/kuchmenko/fellowship-rs/actions/workflows/ci.yml/badge.svg)](https://github.com/kuchmenko/fellowship-rs/actions/workflows/ci.yml)
+[![Crates.io](https://img.shields.io/crates/v/tkach.svg)](https://crates.io/crates/tkach)
+[![Docs.rs](https://img.shields.io/docsrs/tkach)](https://docs.rs/tkach)
+[![CI](https://github.com/kuchmenko/tkach/actions/workflows/ci.yml/badge.svg)](https://github.com/kuchmenko/tkach/actions/workflows/ci.yml)
 [![MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-> **Status:** pre-1.0 (`0.2.0`). Breaking changes are signalled via `feat!:` conventional commits and recorded in [`CHANGELOG.md`](./CHANGELOG.md). The core API just stabilised across three milestones — foundation, streaming, approval — and is settling, but expect motion.
+> **Status:** pre-1.0 (`0.3.0`). Breaking changes are signalled via `feat!:` conventional commits and recorded in [`CHANGELOG.md`](./CHANGELOG.md). The core API just stabilised across three milestones — foundation, streaming, approval — and is settling, but expect motion.
 
 ## Why this exists
 
@@ -24,12 +24,12 @@ LLM agent runtimes tend to either (a) bake in a single provider and hide the loo
 
 ```toml
 [dependencies]
-fellowship-rs = "0.2"
+tkach = "0.3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
 ```rust
-use fellowship::{Agent, CancellationToken, Message, providers::Anthropic, tools};
+use tkach::{Agent, CancellationToken, Message, providers::Anthropic, tools};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -98,7 +98,7 @@ async fn main() -> anyhow::Result<()> {
 ## Providers
 
 ```rust
-use fellowship::providers::{Anthropic, OpenAICompatible};
+use tkach::providers::{Anthropic, OpenAICompatible};
 
 // Anthropic
 let p = Anthropic::from_env();   // ANTHROPIC_API_KEY
@@ -121,7 +121,7 @@ Implementing your own provider: implement `LlmProvider` (one `complete` and one 
 ## Streaming
 
 ```rust
-use fellowship::{Agent, CancellationToken, Message, StreamEvent};
+use tkach::{Agent, CancellationToken, Message, StreamEvent};
 use futures::StreamExt;
 
 let mut stream = agent.stream(history, CancellationToken::new());
@@ -155,7 +155,7 @@ See [`examples/streaming_cancel.rs`](./examples/streaming_cancel.rs) for live ca
 ## Approval flow
 
 ```rust
-use fellowship::{ApprovalDecision, ApprovalHandler, ToolClass};
+use tkach::{ApprovalDecision, ApprovalHandler, ToolClass};
 use async_trait::async_trait;
 use serde_json::Value;
 
@@ -188,7 +188,7 @@ let agent = Agent::builder()
 ## Custom tools
 
 ```rust
-use fellowship::{Tool, ToolClass, ToolContext, ToolError, ToolOutput};
+use tkach::{Tool, ToolClass, ToolContext, ToolError, ToolOutput};
 use serde_json::{Value, json};
 
 struct CurrentTime;

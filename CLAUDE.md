@@ -1,15 +1,16 @@
-# fellowship (crate `fellowship-rs`)
+# tkach
 
 Provider-independent single-agent runtime for Rust with built-in tools.
 
-The crate is published on crates.io as `fellowship-rs` because the bare
-`fellowship` name was taken. Inside Rust code it imports as `fellowship`
-(via `[lib] name = "fellowship"` in Cargo.toml).
+`tkach` (ткач) is Russian for *weaver* — the runtime weaves provider
+calls, tool dispatch, approval gating and cancellation into a single
+agent loop. Crate name and library import path are both `tkach`.
 
-The repository is `kuchmenko/fellowship-rs` on GitHub. It was renamed
-from `kuchmenko/agent-runtime` on 2026-04-26; GitHub keeps an automatic
-redirect from the old URL, so any pre-rename links in commit messages,
-issues, and CHANGELOG.md continue to resolve.
+The repository is `kuchmenko/tkach` on GitHub. It was previously named
+`kuchmenko/agent-runtime` (until 2026-04-26) and `kuchmenko/fellowship-rs`
+(briefly, 2026-04-26). GitHub keeps automatic redirects from those old
+URLs, so links in commit messages, prior issues, and `CHANGELOG.md`
+continue to resolve.
 
 ## Architecture
 

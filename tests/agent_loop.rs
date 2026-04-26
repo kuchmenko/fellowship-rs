@@ -1,12 +1,12 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use fellowship::message::{Content, Message, StopReason, Usage};
-use fellowship::provider::Response;
-use fellowship::providers::Mock;
-use fellowship::{Agent, AgentError, CancellationToken, StreamEvent};
 use futures::StreamExt;
 use serde_json::json;
+use tkach::message::{Content, Message, StopReason, Usage};
+use tkach::provider::Response;
+use tkach::providers::Mock;
+use tkach::{Agent, AgentError, CancellationToken, StreamEvent};
 
 fn test_dir() -> std::path::PathBuf {
     std::env::current_dir().unwrap()
@@ -67,7 +67,7 @@ async fn tool_call_then_text_response() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -118,7 +118,7 @@ async fn multiple_tool_calls_single_response() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -152,7 +152,7 @@ async fn max_turns_exceeded() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .max_turns(3)
         .working_dir(test_dir())
         .build();
@@ -277,7 +277,7 @@ async fn usage_accumulates_across_turns() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -314,10 +314,7 @@ async fn read_tool_reads_actual_file() {
                     Content::ToolResult { content, .. } => content.clone(),
                     _ => panic!("expected tool result"),
                 };
-                assert!(
-                    content.contains("fellowship-rs"),
-                    "should contain package name"
-                );
+                assert!(content.contains("tkach"), "should contain package name");
 
                 Ok(Response {
                     content: vec![Content::text("I read the Cargo.toml")],
@@ -331,7 +328,7 @@ async fn read_tool_reads_actual_file() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -381,7 +378,7 @@ async fn glob_tool_finds_files() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -396,7 +393,7 @@ async fn glob_tool_finds_files() {
 
 #[tokio::test]
 async fn multi_turn_tool_chain() {
-    let tmp_dir = std::env::temp_dir().join("fellowship_test");
+    let tmp_dir = std::env::temp_dir().join("tkach_test");
     let _ = std::fs::create_dir_all(&tmp_dir);
     let test_file = tmp_dir.join("test.txt");
     std::fs::write(&test_file, "hello world").unwrap();
@@ -442,7 +439,7 @@ async fn multi_turn_tool_chain() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(&tmp_dir)
         .build();
 
@@ -498,7 +495,7 @@ async fn end_turn_stops_even_with_tool_use_content() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -539,7 +536,7 @@ async fn cancel_during_bash_tool_returns_cancelled() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -591,7 +588,7 @@ async fn provider_error_returns_partial() {
                     output_tokens: 5,
                 },
             }),
-            _ => Err(fellowship::ProviderError::Overloaded {
+            _ => Err(tkach::ProviderError::Overloaded {
                 retry_after_ms: Some(2_000),
             }),
         }
@@ -600,7 +597,7 @@ async fn provider_error_returns_partial() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -677,7 +674,7 @@ async fn stream_tool_call_then_text_response_executes_tool_inline() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -744,7 +741,7 @@ async fn stream_cancel_before_start_returns_cancelled_via_into_result() {
 
 #[tokio::test]
 async fn stream_emits_tool_call_pending_before_executing_tool() {
-    use fellowship::ToolClass;
+    use tkach::ToolClass;
 
     let call = Arc::new(AtomicUsize::new(0));
     let call_clone = call.clone();
@@ -772,7 +769,7 @@ async fn stream_emits_tool_call_pending_before_executing_tool() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -823,8 +820,8 @@ async fn stream_emits_tool_call_pending_before_executing_tool() {
 #[tokio::test]
 async fn stream_with_deny_handler_emits_pending_but_skips_execution() {
     use async_trait::async_trait;
-    use fellowship::{ApprovalDecision, ApprovalHandler, ToolClass};
     use serde_json::Value;
+    use tkach::{ApprovalDecision, ApprovalHandler, ToolClass};
 
     struct DenyAll;
     #[async_trait]
@@ -860,7 +857,7 @@ async fn stream_with_deny_handler_emits_pending_but_skips_execution() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .approval(DenyAll)
         .working_dir(test_dir())
         .build();
