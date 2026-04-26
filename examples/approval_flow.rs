@@ -19,13 +19,13 @@ use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
-use fellowship::message::Content;
-use fellowship::{
+use futures::StreamExt;
+use serde_json::Value;
+use tkach::message::Content;
+use tkach::{
     Agent, ApprovalDecision, ApprovalHandler, CancellationToken, Message, StreamEvent, ToolClass,
     providers::Anthropic,
 };
-use futures::StreamExt;
-use serde_json::Value;
 
 /// Approval handler used in this demo.
 ///
@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              explain to the user briefly what happened — do NOT silently \
              retry the same command, and do NOT pretend it succeeded.",
         )
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .approval(approval)
         .max_turns(5)
         .max_tokens(512)

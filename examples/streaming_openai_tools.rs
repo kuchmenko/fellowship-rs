@@ -18,9 +18,9 @@
 
 use std::io::Write;
 
-use fellowship::message::Content;
-use fellowship::{Agent, CancellationToken, Message, StreamEvent, providers::OpenAICompatible};
 use futures::StreamExt;
+use tkach::message::Content;
+use tkach::{Agent, CancellationToken, Message, StreamEvent, providers::OpenAICompatible};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -46,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("[model: {model}]  [base: {base_url}]");
     eprintln!();
 
-    let dir = std::env::temp_dir().join("fellowship_streaming_openai");
+    let dir = std::env::temp_dir().join("tkach_streaming_openai");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
 
@@ -60,7 +60,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              `bash` tool with that exact command. After receiving the \
              output, report it back briefly.",
         )
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .max_turns(5)
         .max_tokens(512)
         .working_dir(&dir)

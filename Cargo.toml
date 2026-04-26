@@ -1,22 +1,15 @@
 [package]
-name = "fellowship-rs"
+name = "tkach"
 version = "0.3.0"
 edition = "2024"
 rust-version = "1.86.0"
 description = "A provider-independent agent runtime for Rust with built-in tools"
 license = "MIT"
-repository = "https://github.com/kuchmenko/fellowship-rs"
-documentation = "https://docs.rs/fellowship-rs"
+repository = "https://github.com/kuchmenko/tkach"
+documentation = "https://docs.rs/tkach"
 readme = "README.md"
 keywords = ["agent", "ai", "llm", "anthropic", "openai"]
 categories = ["api-bindings", "asynchronous"]
-
-# Crate name on crates.io is `fellowship-rs` (the bare `fellowship`
-# name was already taken). The library import path stays clean —
-# `use fellowship::Agent;` — via the explicit lib name below.
-[lib]
-name = "fellowship"
-path = "src/lib.rs"
 
 [dependencies]
 tokio = { version = "1", features = ["full"] }

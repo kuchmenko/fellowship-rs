@@ -7,12 +7,12 @@
 use std::path::Path;
 use std::sync::{Arc, Once};
 
-use fellowship::message::{Content, Message};
-use fellowship::provider::Request;
-use fellowship::providers::{Anthropic, OpenAICompatible};
-use fellowship::tools::SubAgent;
-use fellowship::{Agent, AgentResult, CancellationToken, LlmProvider, StreamEvent};
 use futures::StreamExt;
+use tkach::message::{Content, Message};
+use tkach::provider::Request;
+use tkach::providers::{Anthropic, OpenAICompatible};
+use tkach::tools::SubAgent;
+use tkach::{Agent, AgentResult, CancellationToken, LlmProvider, StreamEvent};
 
 /// Load `.env` once per test process. `cargo test` runs every `#[test]` on
 /// the same process by default, so the `Once` ensures a single load.
@@ -46,7 +46,7 @@ fn haiku_agent(working_dir: &Path) -> Agent {
         .provider(require_api_key())
         .model("claude-haiku-4-5-20251001")
         .system("You are a concise assistant. Use tools when needed. Be brief.")
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .max_turns(10)
         .max_tokens(1024)
         .working_dir(working_dir)
@@ -63,8 +63,8 @@ fn sonnet_agent(working_dir: &Path) -> Agent {
         .provider_arc(provider)
         .model("claude-sonnet-4-6")
         .system("You are a concise coding assistant. Use tools when needed. Be brief.")
-        .tools(fellowship::tools::defaults())
-        .tool(fellowship::tools::WebFetch)
+        .tools(tkach::tools::defaults())
+        .tool(tkach::tools::WebFetch)
         .tool(sub_agent)
         .max_turns(15)
         .max_tokens(4096)
@@ -123,9 +123,7 @@ fn assert_file_contains(path: &Path, expected: &str) {
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir()
-        .join("fellowship_integration")
-        .join(name);
+    let dir = std::env::temp_dir().join("tkach_integration").join(name);
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     dir

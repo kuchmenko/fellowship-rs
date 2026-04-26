@@ -113,29 +113,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "fellowship-rs"
-version = "0.3.0"
-dependencies = [
- "async-trait",
- "dotenvy",
- "eventsource-stream",
- "futures",
- "glob",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tokio-test",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "walkdir",
-]
-
-[[package]]
 name = "find-msvc-tools"
 version = "0.1.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1114,6 +1091,29 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
+
+[[package]]
+name = "tkach"
+version = "0.3.0"
+dependencies = [
+ "async-trait",
+ "dotenvy",
+ "eventsource-stream",
+ "futures",
+ "glob",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
+]
 
 [[package]]
 name = "tokio"

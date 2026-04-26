@@ -29,17 +29,15 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
-use fellowship::tools::SubAgent;
-use fellowship::{
-    Agent, CancellationToken, LlmProvider, Message, StreamEvent, providers::Anthropic,
-};
 use futures::StreamExt;
+use tkach::tools::SubAgent;
+use tkach::{Agent, CancellationToken, LlmProvider, Message, StreamEvent, providers::Anthropic};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv_override();
 
-    let dir = std::env::temp_dir().join("fellowship_streaming_subagent");
+    let dir = std::env::temp_dir().join("tkach_streaming_subagent");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir)?;
     std::fs::write(
@@ -65,7 +63,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              that requires reading a file, delegate the read to a sub-agent \
              via the `agent` tool, then synthesise the answer briefly.",
         )
-        .tools(fellowship::tools::defaults())
+        .tools(tkach::tools::defaults())
         .tool(sub_agent)
         .max_depth(3)
         .max_turns(8)
@@ -145,7 +143,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Successful EndTurn after the sub-agent returned.
     assert_eq!(
         result.stop_reason,
-        fellowship::StopReason::EndTurn,
+        tkach::StopReason::EndTurn,
         "should have terminated cleanly"
     );
 

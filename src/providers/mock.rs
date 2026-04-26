@@ -15,9 +15,9 @@ type ResponseFn = dyn Fn(&Request) -> Result<Response, ProviderError> + Send + S
 /// # Example
 ///
 /// ```ignore
-/// use fellowship::providers::Mock;
-/// use fellowship::message::{Content, StopReason, Usage};
-/// use fellowship::provider::Response;
+/// use tkach::providers::Mock;
+/// use tkach::message::{Content, StopReason, Usage};
+/// use tkach::provider::Response;
 ///
 /// let mock = Mock::new(|_req| {
 ///     Ok(Response {

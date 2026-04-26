@@ -17,13 +17,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use fellowship::message::{Content, StopReason, Usage};
-use fellowship::provider::Response;
-use fellowship::providers::Mock;
-use fellowship::{
+use serde_json::{Value, json};
+use tkach::message::{Content, StopReason, Usage};
+use tkach::provider::Response;
+use tkach::providers::Mock;
+use tkach::{
     Agent, CancellationToken, Message, Tool, ToolClass, ToolContext, ToolError, ToolOutput,
 };
-use serde_json::{Value, json};
 
 /// A read-only tool that sleeps then echoes its name.
 struct SlowReader {

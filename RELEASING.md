@@ -1,4 +1,4 @@
-# Releasing fellowship-rs
+# Releasing tkach
 
 ## Versioning
 
