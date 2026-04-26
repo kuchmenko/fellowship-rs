@@ -1,9 +1,10 @@
-//! # fellowship
+//! # tkach
 //!
 //! A provider-independent agent runtime for Rust with built-in tools.
 //!
-//! Crate name on crates.io is `fellowship-rs` (the bare `fellowship`
-//! was already taken). The library imports as `fellowship`.
+//! `tkach` is Russian for "weaver" — the runtime weaves provider calls,
+//! tool dispatch, approval gating and cancellation into a single agent
+//! loop.
 //!
 //! The agent is stateless — callers own the message history and pass
 //! it in on every call.
@@ -11,7 +12,7 @@
 //! ## Quick Start
 //!
 //! ```ignore
-//! use fellowship::{Agent, CancellationToken, Message, providers::Anthropic, tools};
+//! use tkach::{Agent, CancellationToken, Message, providers::Anthropic, tools};
 //!
 //! #[tokio::main]
 //! async fn main() -> anyhow::Result<()> {

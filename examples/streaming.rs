@@ -8,8 +8,8 @@
 
 use std::io::Write;
 
-use fellowship::{Agent, CancellationToken, Message, StreamEvent, providers::Anthropic};
 use futures::StreamExt;
+use tkach::{Agent, CancellationToken, Message, StreamEvent, providers::Anthropic};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {

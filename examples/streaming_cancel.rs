@@ -20,10 +20,8 @@
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use fellowship::{
-    Agent, AgentError, CancellationToken, Message, StreamEvent, providers::Anthropic,
-};
 use futures::StreamExt;
+use tkach::{Agent, AgentError, CancellationToken, Message, StreamEvent, providers::Anthropic};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -116,7 +114,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert_eq!(
         partial.stop_reason,
-        fellowship::StopReason::Cancelled,
+        tkach::StopReason::Cancelled,
         "partial should carry StopReason::Cancelled"
     );
     // Whole 500-word essay would take many seconds; we should have

@@ -81,7 +81,7 @@ pub enum ToolClass {
 /// # Example
 ///
 /// ```ignore
-/// use fellowship::{Tool, ToolContext, ToolOutput, ToolError};
+/// use tkach::{Tool, ToolContext, ToolOutput, ToolError};
 /// use serde_json::{json, Value};
 ///
 /// struct MyTool;
