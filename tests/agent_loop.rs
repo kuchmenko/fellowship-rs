@@ -1,10 +1,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use agent_runtime::message::{Content, Message, StopReason, Usage};
-use agent_runtime::provider::Response;
-use agent_runtime::providers::Mock;
-use agent_runtime::{Agent, AgentError, CancellationToken, StreamEvent};
+use fellowship::message::{Content, Message, StopReason, Usage};
+use fellowship::provider::Response;
+use fellowship::providers::Mock;
+use fellowship::{Agent, AgentError, CancellationToken, StreamEvent};
 use futures::StreamExt;
 use serde_json::json;
 
@@ -67,7 +67,7 @@ async fn tool_call_then_text_response() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -118,7 +118,7 @@ async fn multiple_tool_calls_single_response() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -152,7 +152,7 @@ async fn max_turns_exceeded() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .max_turns(3)
         .working_dir(test_dir())
         .build();
@@ -277,7 +277,7 @@ async fn usage_accumulates_across_turns() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -315,7 +315,7 @@ async fn read_tool_reads_actual_file() {
                     _ => panic!("expected tool result"),
                 };
                 assert!(
-                    content.contains("agent-runtime"),
+                    content.contains("fellowship-rs"),
                     "should contain package name"
                 );
 
@@ -331,7 +331,7 @@ async fn read_tool_reads_actual_file() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -381,7 +381,7 @@ async fn glob_tool_finds_files() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -396,7 +396,7 @@ async fn glob_tool_finds_files() {
 
 #[tokio::test]
 async fn multi_turn_tool_chain() {
-    let tmp_dir = std::env::temp_dir().join("agent_runtime_test");
+    let tmp_dir = std::env::temp_dir().join("fellowship_test");
     let _ = std::fs::create_dir_all(&tmp_dir);
     let test_file = tmp_dir.join("test.txt");
     std::fs::write(&test_file, "hello world").unwrap();
@@ -442,7 +442,7 @@ async fn multi_turn_tool_chain() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(&tmp_dir)
         .build();
 
@@ -498,7 +498,7 @@ async fn end_turn_stops_even_with_tool_use_content() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -539,7 +539,7 @@ async fn cancel_during_bash_tool_returns_cancelled() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -591,7 +591,7 @@ async fn provider_error_returns_partial() {
                     output_tokens: 5,
                 },
             }),
-            _ => Err(agent_runtime::ProviderError::Overloaded {
+            _ => Err(fellowship::ProviderError::Overloaded {
                 retry_after_ms: Some(2_000),
             }),
         }
@@ -600,7 +600,7 @@ async fn provider_error_returns_partial() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -677,7 +677,7 @@ async fn stream_tool_call_then_text_response_executes_tool_inline() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -744,7 +744,7 @@ async fn stream_cancel_before_start_returns_cancelled_via_into_result() {
 
 #[tokio::test]
 async fn stream_emits_tool_call_pending_before_executing_tool() {
-    use agent_runtime::ToolClass;
+    use fellowship::ToolClass;
 
     let call = Arc::new(AtomicUsize::new(0));
     let call_clone = call.clone();
@@ -772,7 +772,7 @@ async fn stream_emits_tool_call_pending_before_executing_tool() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .working_dir(test_dir())
         .build();
 
@@ -822,8 +822,8 @@ async fn stream_emits_tool_call_pending_before_executing_tool() {
 
 #[tokio::test]
 async fn stream_with_deny_handler_emits_pending_but_skips_execution() {
-    use agent_runtime::{ApprovalDecision, ApprovalHandler, ToolClass};
     use async_trait::async_trait;
+    use fellowship::{ApprovalDecision, ApprovalHandler, ToolClass};
     use serde_json::Value;
 
     struct DenyAll;
@@ -860,7 +860,7 @@ async fn stream_with_deny_handler_emits_pending_but_skips_execution() {
     let agent = Agent::builder()
         .provider(mock)
         .model("test")
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .approval(DenyAll)
         .working_dir(test_dir())
         .build();

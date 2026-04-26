@@ -18,12 +18,12 @@
 use std::io::Write;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use agent_runtime::message::Content;
-use agent_runtime::{
+use async_trait::async_trait;
+use fellowship::message::Content;
+use fellowship::{
     Agent, ApprovalDecision, ApprovalHandler, CancellationToken, Message, StreamEvent, ToolClass,
     providers::Anthropic,
 };
-use async_trait::async_trait;
 use futures::StreamExt;
 use serde_json::Value;
 
@@ -79,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
              explain to the user briefly what happened — do NOT silently \
              retry the same command, and do NOT pretend it succeeded.",
         )
-        .tools(agent_runtime::tools::defaults())
+        .tools(fellowship::tools::defaults())
         .approval(approval)
         .max_turns(5)
         .max_tokens(512)

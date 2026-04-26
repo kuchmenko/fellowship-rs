@@ -17,10 +17,10 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use agent_runtime::message::{Content, StopReason, Usage};
-use agent_runtime::provider::Response;
-use agent_runtime::providers::Mock;
-use agent_runtime::{
+use fellowship::message::{Content, StopReason, Usage};
+use fellowship::provider::Response;
+use fellowship::providers::Mock;
+use fellowship::{
     Agent, CancellationToken, Message, Tool, ToolClass, ToolContext, ToolError, ToolOutput,
 };
 use serde_json::{Value, json};

@@ -1,16 +1,29 @@
-# agent-runtime
+# fellowship (crate `fellowship-rs`)
 
 Provider-independent single-agent runtime for Rust with built-in tools.
 
+The crate is published on crates.io as `fellowship-rs` because the bare
+`fellowship` name was taken. Inside Rust code it imports as `fellowship`
+(via `[lib] name = "fellowship"` in Cargo.toml).
+
+The repository is `kuchmenko/fellowship-rs` on GitHub. It was renamed
+from `kuchmenko/agent-runtime` on 2026-04-26; GitHub keeps an automatic
+redirect from the old URL, so any pre-rename links in commit messages,
+issues, and CHANGELOG.md continue to resolve.
+
 ## Architecture
 
-Single crate (`agent-runtime`) with modules:
-- `agent` — Agent struct, builder, agent loop
-- `tool` — Tool trait, ToolContext, ToolOutput
+Single crate with modules:
+- `agent` — Agent struct, builder, agent loop, AgentStream
+- `approval` — ApprovalHandler trait, ApprovalDecision, AutoApprove
+- `tool` — Tool trait, ToolContext, ToolOutput, ToolClass
+- `executor` — ToolExecutor, ToolRegistry, ToolPolicy, AllowAll
 - `provider` — LlmProvider trait, Request/Response
+- `stream` — StreamEvent, ProviderEventStream
 - `message` — Message, Content, Role, StopReason, Usage
+- `error` — AgentError, ProviderError, ToolError
 - `tools/` — Built-in tools: Read, Write, Edit, Glob, Grep, Bash, SubAgent, WebFetch
-- `providers/` — Anthropic, Mock
+- `providers/` — Anthropic, OpenAICompatible, Mock
 
 ## Commands
 

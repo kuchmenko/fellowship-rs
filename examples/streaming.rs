@@ -8,7 +8,7 @@
 
 use std::io::Write;
 
-use agent_runtime::{Agent, CancellationToken, Message, StreamEvent, providers::Anthropic};
+use fellowship::{Agent, CancellationToken, Message, StreamEvent, providers::Anthropic};
 use futures::StreamExt;
 
 #[tokio::main]

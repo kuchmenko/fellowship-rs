@@ -20,7 +20,7 @@
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-use agent_runtime::{
+use fellowship::{
     Agent, AgentError, CancellationToken, Message, StreamEvent, providers::Anthropic,
 };
 use futures::StreamExt;
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     assert_eq!(
         partial.stop_reason,
-        agent_runtime::StopReason::Cancelled,
+        fellowship::StopReason::Cancelled,
         "partial should carry StopReason::Cancelled"
     );
     // Whole 500-word essay would take many seconds; we should have

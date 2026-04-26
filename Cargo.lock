@@ -3,29 +3,6 @@
 version = 4
 
 [[package]]
-name = "agent-runtime"
-version = "0.2.0"
-dependencies = [
- "async-trait",
- "dotenvy",
- "eventsource-stream",
- "futures",
- "glob",
- "regex",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tokio-test",
- "tokio-util",
- "tracing",
- "tracing-subscriber",
- "walkdir",
-]
-
-[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -133,6 +110,29 @@ dependencies = [
  "futures-core",
  "nom",
  "pin-project-lite",
+]
+
+[[package]]
+name = "fellowship-rs"
+version = "0.2.0"
+dependencies = [
+ "async-trait",
+ "dotenvy",
+ "eventsource-stream",
+ "futures",
+ "glob",
+ "regex",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
+ "tokio-test",
+ "tokio-util",
+ "tracing",
+ "tracing-subscriber",
+ "walkdir",
 ]
 
 [[package]]

@@ -15,9 +15,9 @@ type ResponseFn = dyn Fn(&Request) -> Result<Response, ProviderError> + Send + S
 /// # Example
 ///
 /// ```ignore
-/// use agent_runtime::providers::Mock;
-/// use agent_runtime::message::{Content, StopReason, Usage};
-/// use agent_runtime::provider::Response;
+/// use fellowship::providers::Mock;
+/// use fellowship::message::{Content, StopReason, Usage};
+/// use fellowship::provider::Response;
 ///
 /// let mock = Mock::new(|_req| {
 ///     Ok(Response {
