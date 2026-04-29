@@ -120,6 +120,49 @@ Implementing your own provider: implement `LlmProvider` (one `complete` and one 
 
 `SystemBlock::cached`, `Content::text_cached`, and `AgentBuilder::cache_tools` mark cache breakpoints; `Usage` reports `cache_creation_input_tokens` / `cache_read_input_tokens` so callers can measure hit rate. Default TTL 5min, 1h via `CacheControl::ephemeral_1h()`. Cache reads bill at 0.1x base input; writes at 1.25x (5m) / 2x (1h). See `examples/anthropic_caching.rs` and `examples/anthropic_caching_streaming.rs`.
 
+### Anthropic Message Batches (50 % async)
+
+Anthropic's [Message Batches API](https://docs.anthropic.com/en/api/messages-batches) takes the same `Request` body, runs it asynchronously over up to 24h, and bills **50 % off** input + output tokens. Stack with `SystemBlock::cached_1h(...)` for ≈85 % off when prefixes are stable across batches. Right call for overnight backfills, scheduled recompute jobs, evals, or any workload that doesn't care about p99.
+
+```rust
+use futures::StreamExt;
+use tkach::providers::Anthropic;
+use tkach::providers::anthropic::batch::{BatchOutcome, BatchRequest};
+use tkach::{Message, Request};
+
+let provider = Anthropic::from_env();
+
+let requests = vec![BatchRequest {
+    custom_id: "req-1".into(),               // ^[a-zA-Z0-9_-]{1,64}$, unique within batch
+    params: Request {
+        model: "claude-haiku-4-5-20251001".into(),
+        system: None,
+        messages: vec![Message::user_text("Say hello.")],
+        tools: vec![],
+        max_tokens: 64,
+        temperature: None,
+    },
+}];
+
+let handle = provider.create_batch(requests).await?;          // status=InProgress
+loop {
+    let h = provider.retrieve_batch(&handle.id).await?;
+    if h.is_terminal() { break }                              // status=Ended
+    tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+}
+
+let mut stream = provider.batch_results(&handle.id).await?;   // JSONL line-by-line
+while let Some(item) = stream.next().await {
+    match item?.outcome {
+        BatchOutcome::Succeeded(resp) => { /* same Response shape as complete() */ }
+        BatchOutcome::Errored { error_type, message } => { /* per-row error */ }
+        BatchOutcome::Canceled | BatchOutcome::Expired => {}
+    }
+}
+```
+
+`custom_id`s are validated client-side (regex + dedup) before the HTTP call. Caller owns the polling cadence — there's no `await_batch` helper because the right interval (every 5min vs every 1h vs exp-backoff) is workload-dependent. See `examples/anthropic_batch.rs`, `examples/anthropic_batch_cancel.rs`, `examples/anthropic_batch_mixed.rs`.
+
 ## Streaming
 
 ```rust
@@ -231,6 +274,9 @@ Each runnable demo also asserts its invariants — `cargo run --example NAME` ei
 | [`approval_flow.rs`](./examples/approval_flow.rs) | Live denial flow with custom `ApprovalHandler` |
 | [`parallel_tools.rs`](./examples/parallel_tools.rs) | Read-only tools running in parallel |
 | [`custom_tool.rs`](./examples/custom_tool.rs) | Defining your own tool |
+| [`anthropic_batch.rs`](./examples/anthropic_batch.rs) | Batch API happy path: submit → poll → stream results (50% off, 24h async) |
+| [`anthropic_batch_cancel.rs`](./examples/anthropic_batch_cancel.rs) | Batch cancel-then-fetch-partial — mix of `Succeeded` and `Canceled` outcomes |
+| [`anthropic_batch_mixed.rs`](./examples/anthropic_batch_mixed.rs) | Per-row error isolation — bad request rides alongside successes as `Errored` |
 
 Examples that talk to live APIs read `ANTHROPIC_API_KEY` (and optionally `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `OPENAI_SMOKE_MODEL`) from `.env` — see [`.env.example`](./.env.example).
 

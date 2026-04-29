@@ -111,6 +111,14 @@ pub enum ProviderError {
     #[error("deserialization error: {0}")]
     Deserialization(#[from] serde_json::Error),
 
+    /// `Anthropic::batch_results` was called while the batch was still
+    /// `in_progress` or `canceling`. Caller must keep polling
+    /// `retrieve_batch` until the status reaches `ended`, then re-call.
+    /// Carries the textual status (Anthropic's wire form) so callers can
+    /// log without round-tripping through the typed enum.
+    #[error("batch not ready (status: {status})")]
+    BatchNotReady { status: String },
+
     /// Escape hatch for provider-specific errors that don't fit the above.
     /// Not retryable by default.
     #[error("{0}")]
@@ -130,7 +138,9 @@ impl ProviderError {
             ProviderError::Http(e) => is_transient_reqwest(e),
             ProviderError::Api { retryable, .. } => *retryable,
             ProviderError::Overloaded { .. } | ProviderError::RateLimit { .. } => true,
-            ProviderError::Deserialization(_) | ProviderError::Other(_) => false,
+            ProviderError::Deserialization(_)
+            | ProviderError::Other(_)
+            | ProviderError::BatchNotReady { .. } => false,
         }
     }
 
@@ -230,6 +240,15 @@ mod tests {
     fn deserialization_never_retryable() {
         let err: serde_json::Error = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
         let e = ProviderError::Deserialization(err);
+        assert!(!e.is_retryable());
+        assert!(e.retry_after().is_none());
+    }
+
+    #[test]
+    fn batch_not_ready_never_retryable() {
+        let e = ProviderError::BatchNotReady {
+            status: "in_progress".into(),
+        };
         assert!(!e.is_retryable());
         assert!(e.retry_after().is_none());
     }

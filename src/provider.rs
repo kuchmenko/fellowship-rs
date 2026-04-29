@@ -63,6 +63,7 @@ impl SystemBlock {
 }
 
 /// Request to the LLM provider.
+#[derive(Debug, Clone)]
 pub struct Request {
     pub model: String,
     pub system: Option<Vec<SystemBlock>>,
@@ -73,6 +74,7 @@ pub struct Request {
 }
 
 /// Response from the LLM provider.
+#[derive(Debug, Clone)]
 pub struct Response {
     pub content: Vec<Content>,
     pub stop_reason: StopReason,
