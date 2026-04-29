@@ -429,18 +429,8 @@ impl Anthropic {
         &self,
         opts: ListBatchesOpts,
     ) -> Result<Vec<BatchHandle>, ProviderError> {
+        let query = list_batches_query(opts);
         let mut req = self.get(&self.batches_url());
-
-        let mut query: Vec<(&str, String)> = Vec::new();
-        if let Some(limit) = opts.limit {
-            query.push(("limit", limit.to_string()));
-        }
-        if let Some(before) = opts.before_id {
-            query.push(("before_id", before));
-        }
-        if let Some(after) = opts.after_id {
-            query.push(("after_id", after));
-        }
         if !query.is_empty() {
             req = req.query(&query);
         }
@@ -482,6 +472,24 @@ impl Anthropic {
 }
 
 // --- HTTP error helpers -----------------------------------------------------
+
+/// Project [`ListBatchesOpts`] into reqwest's query-pair shape, dropping
+/// `None` fields. Pulled out of `list_batches` so the per-field
+/// branching doesn't push the method past the cognitive-complexity
+/// budget.
+fn list_batches_query(opts: ListBatchesOpts) -> Vec<(&'static str, String)> {
+    let mut query: Vec<(&'static str, String)> = Vec::new();
+    if let Some(limit) = opts.limit {
+        query.push(("limit", limit.to_string()));
+    }
+    if let Some(before) = opts.before_id {
+        query.push(("before_id", before));
+    }
+    if let Some(after) = opts.after_id {
+        query.push(("after_id", after));
+    }
+    query
+}
 
 async fn read_api_error(response: reqwest::Response) -> ProviderError {
     let status = response.status().as_u16();
@@ -625,15 +633,22 @@ mod tests {
     }
 
     #[test]
-    fn batch_status_wire_form_round_trips() {
+    fn parse_status_maps_known_wire_forms() {
         assert_eq!(
             parse_status("in_progress").unwrap(),
             BatchStatus::InProgress
         );
         assert_eq!(parse_status("canceling").unwrap(), BatchStatus::Canceling);
         assert_eq!(parse_status("ended").unwrap(), BatchStatus::Ended);
-        assert!(parse_status("garbage").is_err());
+    }
 
+    #[test]
+    fn parse_status_rejects_unknown() {
+        assert!(parse_status("garbage").is_err());
+    }
+
+    #[test]
+    fn as_wire_str_matches_anthropic_spelling() {
         assert_eq!(BatchStatus::InProgress.as_wire_str(), "in_progress");
         assert_eq!(BatchStatus::Canceling.as_wire_str(), "canceling");
         assert_eq!(BatchStatus::Ended.as_wire_str(), "ended");
