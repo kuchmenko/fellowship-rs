@@ -11,13 +11,18 @@ use crate::message::{CacheControl, Content, StopReason, Usage};
 use crate::provider::{LlmProvider, Request, Response, SystemBlock};
 use crate::stream::{ProviderEventStream, StreamEvent};
 
-const API_URL: &str = "https://api.anthropic.com/v1/messages";
-const API_VERSION: &str = "2023-06-01";
+pub mod batch;
+
+/// Default Anthropic API base URL. Override via [`Anthropic::with_base_url`]
+/// for testing against a mock server.
+pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
+pub(crate) const API_VERSION: &str = "2023-06-01";
 
 /// Anthropic LLM provider (Claude).
 pub struct Anthropic {
     api_key: String,
     client: reqwest::Client,
+    base_url: String,
 }
 
 impl Anthropic {
@@ -25,6 +30,7 @@ impl Anthropic {
         Self {
             api_key: api_key.into(),
             client: reqwest::Client::new(),
+            base_url: DEFAULT_BASE_URL.to_string(),
         }
     }
 
@@ -33,6 +39,25 @@ impl Anthropic {
         let api_key =
             std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY env var is required");
         Self::new(api_key)
+    }
+
+    /// Override the API base URL. Pass the **scheme + host** (no
+    /// trailing slash, no `/v1/...` path) — endpoints are appended
+    /// internally. Primarily useful for routing tests through a local
+    /// mock server (e.g. `wiremock`).
+    pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
+        self.base_url = base_url.into();
+        self
+    }
+
+    /// Endpoint URL for `complete` / `stream` (`{base}/v1/messages`).
+    pub(crate) fn messages_url(&self) -> String {
+        format!("{}/v1/messages", self.base_url)
+    }
+
+    /// Endpoint root for batch operations (`{base}/v1/messages/batches`).
+    pub(crate) fn batches_url(&self) -> String {
+        format!("{}/v1/messages/batches", self.base_url)
     }
 }
 
@@ -44,7 +69,7 @@ impl LlmProvider for Anthropic {
 
         let response = self
             .client
-            .post(API_URL)
+            .post(self.messages_url())
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", API_VERSION)
             .header("content-type", "application/json")
@@ -73,7 +98,7 @@ impl LlmProvider for Anthropic {
 
         let response = self
             .client
-            .post(API_URL)
+            .post(self.messages_url())
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", API_VERSION)
             .header("content-type", "application/json")
@@ -101,7 +126,11 @@ impl LlmProvider for Anthropic {
 ///   service unavailable — both are transient server-side pressure signals)
 /// - 500, 502, 504 ⇒ retryable `Api`
 /// - other 5xx ⇒ retryable `Api`, other 4xx ⇒ non-retryable `Api`
-fn classify_error(status: u16, message: String, retry_after_ms: Option<u64>) -> ProviderError {
+pub(crate) fn classify_error(
+    status: u16,
+    message: String,
+    retry_after_ms: Option<u64>,
+) -> ProviderError {
     match status {
         429 => ProviderError::RateLimit { retry_after_ms },
         529 | 503 => ProviderError::Overloaded { retry_after_ms },
@@ -118,7 +147,7 @@ fn classify_error(status: u16, message: String, retry_after_ms: Option<u64>) -> 
     }
 }
 
-fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
+pub(crate) fn parse_retry_after(headers: &reqwest::header::HeaderMap) -> Option<u64> {
     let raw = headers.get(reqwest::header::RETRY_AFTER)?.to_str().ok()?;
     // Spec allows either delay-seconds (integer) or HTTP-date. We only
     // parse the integer form — OpenAI/Anthropic both use seconds in practice.
@@ -398,7 +427,7 @@ fn map_stop_reason(s: &str) -> StopReason {
     }
 }
 
-fn usage_from_api(api: &ApiUsage) -> Usage {
+pub(crate) fn usage_from_api(api: &ApiUsage) -> Usage {
     Usage {
         input_tokens: api.input_tokens,
         output_tokens: api.output_tokens,
@@ -410,34 +439,34 @@ fn usage_from_api(api: &ApiUsage) -> Usage {
 // --- Anthropic API types ---
 
 #[derive(Serialize)]
-struct ApiRequest {
-    model: String,
-    max_tokens: u32,
-    messages: Vec<ApiMessage>,
+pub(crate) struct ApiRequest {
+    pub(crate) model: String,
+    pub(crate) max_tokens: u32,
+    pub(crate) messages: Vec<ApiMessage>,
     /// Typed system blocks (Anthropic accepts either a free string or
     /// an array of typed blocks; we always emit the array form so
     /// `cache_control` works).
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<Vec<ApiSystemBlock>>,
+    pub(crate) system: Option<Vec<ApiSystemBlock>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    tools: Vec<ApiTool>,
+    pub(crate) tools: Vec<ApiTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    temperature: Option<f32>,
+    pub(crate) temperature: Option<f32>,
     /// `stream: true` switches the response to SSE; default false for
-    /// `complete()`.
+    /// `complete()`. Always false on the batch path.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
-    stream: bool,
+    pub(crate) stream: bool,
 }
 
 #[derive(Serialize)]
-struct ApiMessage {
-    role: String,
-    content: Vec<ApiContent>,
+pub(crate) struct ApiMessage {
+    pub(crate) role: String,
+    pub(crate) content: Vec<ApiContent>,
 }
 
 #[derive(Serialize, Deserialize, Clone)]
 #[serde(tag = "type")]
-enum ApiContent {
+pub(crate) enum ApiContent {
     #[serde(rename = "text")]
     Text {
         text: String,
@@ -464,44 +493,44 @@ enum ApiContent {
 }
 
 #[derive(Serialize)]
-struct ApiSystemBlock {
+pub(crate) struct ApiSystemBlock {
     /// Anthropic's typed system block has `type: "text"`.
     #[serde(rename = "type")]
-    kind: &'static str,
-    text: String,
+    pub(crate) kind: &'static str,
+    pub(crate) text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    cache_control: Option<CacheControl>,
+    pub(crate) cache_control: Option<CacheControl>,
 }
 
 #[derive(Serialize)]
-struct ApiTool {
-    name: String,
-    description: String,
-    input_schema: Value,
+pub(crate) struct ApiTool {
+    pub(crate) name: String,
+    pub(crate) description: String,
+    pub(crate) input_schema: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    cache_control: Option<CacheControl>,
+    pub(crate) cache_control: Option<CacheControl>,
 }
 
 #[derive(Deserialize)]
-struct ApiResponse {
-    content: Vec<ApiContent>,
-    stop_reason: String,
-    usage: ApiUsage,
+pub(crate) struct ApiResponse {
+    pub(crate) content: Vec<ApiContent>,
+    pub(crate) stop_reason: String,
+    pub(crate) usage: ApiUsage,
 }
 
 #[derive(Deserialize)]
-struct ApiUsage {
-    input_tokens: u32,
-    output_tokens: u32,
+pub(crate) struct ApiUsage {
+    pub(crate) input_tokens: u32,
+    pub(crate) output_tokens: u32,
     #[serde(default)]
-    cache_creation_input_tokens: u32,
+    pub(crate) cache_creation_input_tokens: u32,
     #[serde(default)]
-    cache_read_input_tokens: u32,
+    pub(crate) cache_read_input_tokens: u32,
 }
 
 // --- Conversion ---
 
-fn build_request_body(request: &Request) -> ApiRequest {
+pub(crate) fn build_request_body(request: &Request) -> ApiRequest {
     let messages = request
         .messages
         .iter()
@@ -573,7 +602,7 @@ fn content_to_api(content: &Content) -> ApiContent {
     }
 }
 
-fn convert_response(api: ApiResponse) -> Response {
+pub(crate) fn convert_response(api: ApiResponse) -> Response {
     let content = api
         .content
         .into_iter()

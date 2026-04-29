@@ -1,4 +1,4 @@
-mod anthropic;
+pub mod anthropic;
 mod mock;
 mod openai_compatible;
 
