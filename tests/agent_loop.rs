@@ -711,9 +711,26 @@ async fn stream_thinking_response_forwards_live_and_preserves_history() {
     assert_eq!(visible, "Done.");
     assert_eq!(result.text, "Done.");
     assert_eq!(result.new_messages.len(), 1);
+    let contents = &result.new_messages[0].content;
+    assert_eq!(contents.len(), 2);
     assert!(matches!(
-        &result.new_messages[0].content[..],
-        [Content::Thinking { .. }, Content::Text { text, .. }] if text == "Done."
+        &contents[0],
+        Content::Thinking {
+            text,
+            provider: ThinkingProvider::OpenAIResponses,
+            metadata: ThinkingMetadata::OpenAIResponses {
+                item_id,
+                output_index: None,
+                summary_index: 0,
+                encrypted_content,
+            },
+        } if text == "I should inspect the repo first."
+            && item_id.as_deref() == Some("rs_1")
+            && encrypted_content.as_deref() == Some("enc")
+    ));
+    assert!(matches!(
+        &contents[1],
+        Content::Text { text, .. } if text == "Done."
     ));
 }
 

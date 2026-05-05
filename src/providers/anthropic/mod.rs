@@ -650,13 +650,10 @@ fn content_to_api(content: &Content) -> Option<ApiContent> {
         Content::Thinking {
             text,
             provider: ThinkingProvider::Anthropic,
-            metadata,
+            metadata: ThinkingMetadata::Anthropic { signature },
         } => Some(ApiContent::Thinking {
             thinking: text.clone(),
-            signature: match metadata {
-                ThinkingMetadata::Anthropic { signature } => signature.clone(),
-                _ => None,
-            },
+            signature: signature.clone(),
         }),
         Content::Thinking { .. } => None,
         Content::ToolUse { id, name, input } => Some(ApiContent::ToolUse {
@@ -901,6 +898,32 @@ mod tests {
                     "foreign",
                     ThinkingProvider::OpenAIResponses,
                     ThinkingMetadata::openai_responses(Some("rs_1".into()), None, 0, None),
+                )]),
+                Message::user_text("next"),
+            ],
+            tools: vec![],
+            max_tokens: 10,
+            temperature: None,
+        };
+        let body = build_request_body(&req);
+        let json = serde_json::to_value(&body).unwrap();
+        let messages = json["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"][0]["text"], "next");
+    }
+
+    #[test]
+    fn anthropic_provider_with_mismatched_metadata_is_dropped() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![
+                Message::assistant(vec![Content::thinking(
+                    "bad metadata",
+                    ThinkingProvider::Anthropic,
+                    ThinkingMetadata::None,
                 )]),
                 Message::user_text("next"),
             ],

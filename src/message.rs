@@ -353,25 +353,25 @@ mod tests {
         assert_eq!(json["metadata"]["item_id"], "rs_123");
 
         let roundtrip: Content = serde_json::from_value(json).unwrap();
-        match roundtrip {
-            Content::Thinking {
-                text,
-                provider,
-                metadata,
-            } => {
-                assert_eq!(text, "inspected repo");
-                assert_eq!(provider, ThinkingProvider::OpenAIResponses);
-                assert_eq!(
-                    metadata,
-                    ThinkingMetadata::OpenAIResponses {
-                        item_id: Some("rs_123".into()),
-                        output_index: None,
-                        summary_index: 0,
-                        encrypted_content: Some("encrypted".into()),
-                    }
-                );
+        let Content::Thinking {
+            text,
+            provider,
+            metadata,
+        } = roundtrip
+        else {
+            panic!("expected thinking content");
+        };
+
+        assert_eq!(text, "inspected repo");
+        assert_eq!(provider, ThinkingProvider::OpenAIResponses);
+        assert_eq!(
+            metadata,
+            ThinkingMetadata::OpenAIResponses {
+                item_id: Some("rs_123".into()),
+                output_index: None,
+                summary_index: 0,
+                encrypted_content: Some("encrypted".into()),
             }
-            other => panic!("expected thinking, got {other:?}"),
-        }
+        );
     }
 }
