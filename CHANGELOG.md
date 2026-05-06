@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0](https://github.com/kuchmenko/tkach/compare/tkach-v0.3.0...tkach-v0.4.0) (2026-05-06)
+
+
+### ⚠ BREAKING CHANGES
+
+* add thinking provider examples and replay guards
+
+### Features
+
+* add Anthropic adaptive thinking ([2b5dd21](https://github.com/kuchmenko/tkach/commit/2b5dd21d4cf16a51d18a81f8f5712e49f6ec0475))
+* add OpenAI Responses thinking provider ([002c19b](https://github.com/kuchmenko/tkach/commit/002c19b650d1d3b61179d181c92564dd36d23482))
+* add provider thinking events ([5db0a6e](https://github.com/kuchmenko/tkach/commit/5db0a6e500ce59268655f773ea9350aebcd235c9))
+* add thinking provider examples and replay guards ([b67f2b2](https://github.com/kuchmenko/tkach/commit/b67f2b293f4136a9db8fe1800e8d39ac196a7c8f))
+* enable Anthropic thinking smoke example ([17417c5](https://github.com/kuchmenko/tkach/commit/17417c5e09b4d649428ba98f143118d887b47bd4))
+
+
+### Bug Fixes
+
+* address thinking review feedback ([da2d45f](https://github.com/kuchmenko/tkach/commit/da2d45f95ac4808412d1b6b25061f6e86be8c32b))
+* preserve Anthropic redacted thinking ([2ba19d7](https://github.com/kuchmenko/tkach/commit/2ba19d7e1a7edc61fcd0c88786c71495b4668b91))
+
 ## [0.3.0](https://github.com/kuchmenko/tkach/compare/tkach-v0.2.0...tkach-v0.3.0) (2026-04-29)
 
 
