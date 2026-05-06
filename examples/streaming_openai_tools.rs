@@ -15,7 +15,7 @@
 //! Defaults to OpenRouter; override base URL + model via env. Examples:
 //!
 //!   OPENAI_BASE_URL=https://openrouter.ai/api/v1
-//!   OPENAI_SMOKE_MODEL=openai/gpt-4o-mini       # works well
+//!   OPENAI_SMOKE_MODEL=openai/gpt-5.5
 //!   OPENAI_SMOKE_MODEL=anthropic/claude-haiku-4-5
 //!   OPENAI_SMOKE_MODEL=moonshotai/kimi-k2.6     # works, may need verbose system
 //!
@@ -44,9 +44,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let base_url = std::env::var("OPENAI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+        .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
     let model =
-        std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "openai/gpt-4o-mini".to_string());
+        std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "openai/gpt-5.5".to_string());
 
     eprintln!("[model: {model}]  [base: {base_url}]");
     eprintln!();
