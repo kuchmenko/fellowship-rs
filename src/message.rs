@@ -74,6 +74,9 @@ pub enum ThinkingMetadata {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
     },
+    AnthropicRedacted {
+        data: String,
+    },
     #[serde(rename = "openai_responses")]
     OpenAIResponses {
         #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -224,6 +227,10 @@ impl ThinkingMetadata {
         ThinkingMetadata::Anthropic { signature }
     }
 
+    pub fn anthropic_redacted(data: impl Into<String>) -> Self {
+        ThinkingMetadata::AnthropicRedacted { data: data.into() }
+    }
+
     pub fn openai_responses(
         item_id: Option<String>,
         output_index: Option<usize>,
@@ -352,6 +359,10 @@ mod tests {
         assert_eq!(json["metadata"]["type"], "openai_responses");
         assert_eq!(json["metadata"]["item_id"], "rs_123");
 
+        assert_thinking_roundtrip(json);
+    }
+
+    fn assert_thinking_roundtrip(json: serde_json::Value) {
         let roundtrip: Content = serde_json::from_value(json).unwrap();
         let Content::Thinking {
             text,

@@ -232,6 +232,8 @@ enum ContentBlockStart {
         #[serde(default)]
         signature: String,
     },
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -276,6 +278,9 @@ enum BlockState {
     Thinking {
         text_buf: String,
         signature: String,
+    },
+    RedactedThinking {
+        data: String,
     },
     ToolUse {
         id: String,
@@ -379,6 +384,9 @@ fn process_payload(
                     text_buf: thinking,
                     signature,
                 },
+                ContentBlockStart::RedactedThinking { data } => {
+                    BlockState::RedactedThinking { data }
+                }
                 ContentBlockStart::ToolUse { id, name, input } => BlockState::ToolUse {
                     id,
                     name,
@@ -429,6 +437,13 @@ fn process_payload(
                             metadata: ThinkingMetadata::Anthropic {
                                 signature: (!signature.is_empty()).then_some(signature),
                             },
+                        }));
+                    }
+                    BlockState::RedactedThinking { data } => {
+                        buffer.push_back(Ok(StreamEvent::ThinkingBlock {
+                            text: String::new(),
+                            provider: ThinkingProvider::Anthropic,
+                            metadata: ThinkingMetadata::AnthropicRedacted { data },
                         }));
                     }
                     BlockState::ToolUse { id, name, json_buf } => {
@@ -532,6 +547,9 @@ pub(crate) enum ApiContent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         signature: Option<String>,
     },
+
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
 
     #[serde(rename = "tool_use")]
     ToolUse {
@@ -655,6 +673,11 @@ fn content_to_api(content: &Content) -> Option<ApiContent> {
             thinking: text.clone(),
             signature: signature.clone(),
         }),
+        Content::Thinking {
+            provider: ThinkingProvider::Anthropic,
+            metadata: ThinkingMetadata::AnthropicRedacted { data },
+            ..
+        } => Some(ApiContent::RedactedThinking { data: data.clone() }),
         Content::Thinking { .. } => None,
         Content::ToolUse { id, name, input } => Some(ApiContent::ToolUse {
             id: id.clone(),
@@ -694,6 +717,11 @@ pub(crate) fn convert_response(api: ApiResponse) -> Response {
                 text: thinking,
                 provider: ThinkingProvider::Anthropic,
                 metadata: ThinkingMetadata::Anthropic { signature },
+            },
+            ApiContent::RedactedThinking { data } => Content::Thinking {
+                text: String::new(),
+                provider: ThinkingProvider::Anthropic,
+                metadata: ThinkingMetadata::AnthropicRedacted { data },
             },
             ApiContent::ToolUse { id, name, input } => Content::ToolUse { id, name, input },
             ApiContent::ToolResult {
@@ -889,6 +917,42 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_redacted_thinking_content_round_trips() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::assistant(vec![Content::thinking(
+                "",
+                ThinkingProvider::Anthropic,
+                ThinkingMetadata::anthropic_redacted("opaque"),
+            )])],
+            tools: vec![],
+            max_tokens: 10,
+            temperature: None,
+        };
+        let body = build_request_body(&req);
+        let json = serde_json::to_value(&body).unwrap();
+        let block = &json["messages"][0]["content"][0];
+        assert_eq!(block["type"], "redacted_thinking");
+        assert_eq!(block["data"], "opaque");
+
+        let raw = json!({
+            "content": [{"type":"redacted_thinking","data":"opaque"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        });
+        let api: ApiResponse = serde_json::from_value(raw).unwrap();
+        assert!(matches!(
+            &convert_response(api).content[0],
+            Content::Thinking {
+                text,
+                provider: ThinkingProvider::Anthropic,
+                metadata: ThinkingMetadata::AnthropicRedacted { data },
+            } if text.is_empty() && data == "opaque"
+        ));
+    }
+
+    #[test]
     fn foreign_thinking_only_message_is_not_serialized_as_empty_message() {
         let req = Request {
             model: "m".into(),
@@ -1035,6 +1099,42 @@ mod tests {
                 },
             } if text == "reason" && signature == "sig"
         ));
+    }
+
+    #[test]
+    fn streaming_redacted_thinking_emits_final_block() {
+        use std::collections::VecDeque;
+        let mut blocks: HashMap<usize, BlockState> = HashMap::new();
+        let mut buffer: VecDeque<Result<StreamEvent, ProviderError>> = VecDeque::new();
+        let mut running = Usage::default();
+
+        process_payload(
+            StreamingPayload::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStart::RedactedThinking {
+                    data: "opaque".into(),
+                },
+            },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+        process_payload(
+            StreamingPayload::ContentBlockStop { index: 0 },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+
+        assert!(matches!(
+            buffer.pop_front().unwrap().unwrap(),
+            StreamEvent::ThinkingBlock {
+                text,
+                provider: ThinkingProvider::Anthropic,
+                metadata: ThinkingMetadata::AnthropicRedacted { data },
+            } if text.is_empty() && data == "opaque"
+        ));
+        assert!(buffer.is_empty());
     }
 
     #[test]

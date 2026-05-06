@@ -421,7 +421,7 @@ fn extend_with_message(out: &mut Vec<ApiMessage>, msg: &Message) {
                 content: if text_parts.is_empty() {
                     None
                 } else {
-                    Some(text_parts.join("\n"))
+                    Some(text_parts.join(""))
                 },
                 tool_calls,
             });
@@ -854,6 +854,32 @@ mod tests {
         assert_eq!(msgs[0]["role"], "tool");
         assert_eq!(msgs[0]["tool_call_id"], "call_1");
         assert_eq!(msgs[1]["tool_call_id"], "call_2");
+    }
+
+    #[test]
+    fn request_drops_thinking_without_inserting_text_separator() {
+        use crate::message::{ThinkingMetadata, ThinkingProvider};
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::assistant(vec![
+                Content::text("Hello"),
+                Content::thinking(
+                    "hidden",
+                    ThinkingProvider::OpenAIResponses,
+                    ThinkingMetadata::openai_responses(Some("rs_1".into()), None, 0, None),
+                ),
+                Content::text("world"),
+            ])],
+            tools: vec![],
+            max_tokens: 10,
+            temperature: None,
+        };
+        let body = build_request_body(&req);
+        let json = serde_json::to_value(&body).unwrap();
+
+        assert_eq!(json["messages"][0]["role"], "assistant");
+        assert_eq!(json["messages"][0]["content"], "Helloworld");
     }
 
     #[test]
