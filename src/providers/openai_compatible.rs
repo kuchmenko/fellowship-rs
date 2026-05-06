@@ -371,7 +371,7 @@ fn extend_with_message(out: &mut Vec<ApiMessage>, msg: &Message) {
                             content: wire_content,
                         });
                     }
-                    Content::ToolUse { .. } => {
+                    Content::ToolUse { .. } | Content::Thinking { .. } => {
                         // Should not appear in a user message; skip silently.
                     }
                 }
@@ -401,8 +401,9 @@ fn extend_with_message(out: &mut Vec<ApiMessage>, msg: &Message) {
                             },
                         });
                     }
-                    Content::ToolResult { .. } => {
-                        // Not expected on assistant side; skip.
+                    Content::Thinking { .. } | Content::ToolResult { .. } => {
+                        // Chat Completions has no standard assistant thinking block;
+                        // provider-specific reasoning state is not replayable here.
                     }
                 }
             }
@@ -420,7 +421,7 @@ fn extend_with_message(out: &mut Vec<ApiMessage>, msg: &Message) {
                 content: if text_parts.is_empty() {
                     None
                 } else {
-                    Some(text_parts.join("\n"))
+                    Some(text_parts.join(""))
                 },
                 tool_calls,
             });
@@ -856,6 +857,59 @@ mod tests {
     }
 
     #[test]
+    fn request_skips_thinking_only_messages() {
+        use crate::message::{ThinkingMetadata, ThinkingProvider};
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![
+                Message::assistant(vec![Content::thinking(
+                    "hidden",
+                    ThinkingProvider::OpenAIResponses,
+                    ThinkingMetadata::openai_responses(Some("rs_1".into()), None, 0, None),
+                )]),
+                Message::user_text("next"),
+            ],
+            tools: vec![],
+            max_tokens: 10,
+            temperature: None,
+        };
+        let body = build_request_body(&req);
+        let json = serde_json::to_value(&body).unwrap();
+        let msgs = json["messages"].as_array().unwrap();
+
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["role"], "user");
+        assert_eq!(msgs[0]["content"], "next");
+    }
+
+    #[test]
+    fn request_drops_thinking_without_inserting_text_separator() {
+        use crate::message::{ThinkingMetadata, ThinkingProvider};
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::assistant(vec![
+                Content::text("Hello"),
+                Content::thinking(
+                    "hidden",
+                    ThinkingProvider::OpenAIResponses,
+                    ThinkingMetadata::openai_responses(Some("rs_1".into()), None, 0, None),
+                ),
+                Content::text("world"),
+            ])],
+            tools: vec![],
+            max_tokens: 10,
+            temperature: None,
+        };
+        let body = build_request_body(&req);
+        let json = serde_json::to_value(&body).unwrap();
+
+        assert_eq!(json["messages"][0]["role"], "assistant");
+        assert_eq!(json["messages"][0]["content"], "Helloworld");
+    }
+
+    #[test]
     fn request_encodes_assistant_tool_use_as_tool_calls_with_string_arguments() {
         let req = Request {
             model: "m".into(),
@@ -885,6 +939,81 @@ mod tests {
         let args_str = tc["function"]["arguments"].as_str().unwrap();
         let parsed: Value = serde_json::from_str(args_str).unwrap();
         assert_eq!(parsed["command"], "ls");
+    }
+
+    #[test]
+    fn response_ignores_non_standard_reasoning_fields() {
+        let raw = serde_json::json!({
+            "choices": [{
+                "message": {
+                    "role": "assistant",
+                    "content": "visible",
+                    "reasoning": "not a standardized chat-completions field",
+                    "reasoning_content": "not safe to expose by default",
+                    "thinking": "also ignored by default"
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": { "prompt_tokens": 2, "completion_tokens": 3 }
+        });
+        let api: ApiResponse = serde_json::from_value(raw).unwrap();
+        let resp = convert_response(api).unwrap();
+
+        assert_eq!(resp.stop_reason, StopReason::EndTurn);
+        assert_eq!(resp.content.len(), 1);
+        assert!(matches!(
+            &resp.content[0],
+            Content::Text { text, .. } if text == "visible"
+        ));
+    }
+
+    #[test]
+    fn streaming_ignores_non_standard_reasoning_fields() {
+        use std::collections::{BTreeMap, VecDeque};
+
+        let chunk: ChatChunk = serde_json::from_value(serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "content": "visible",
+                    "reasoning": "not standardized",
+                    "reasoning_content": "not safe",
+                    "thinking": "not safe"
+                }
+            }]
+        }))
+        .unwrap();
+        let mut slots = BTreeMap::new();
+        let mut pending_stop = None;
+        let mut buffer = VecDeque::new();
+        process_chunk(chunk, &mut slots, &mut pending_stop, &mut buffer);
+
+        assert!(matches!(
+            buffer.pop_front().unwrap().unwrap(),
+            StreamEvent::ContentDelta(text) if text == "visible"
+        ));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn streaming_reasoning_only_chunk_emits_no_thinking() {
+        use std::collections::{BTreeMap, VecDeque};
+
+        let chunk: ChatChunk = serde_json::from_value(serde_json::json!({
+            "choices": [{
+                "delta": {
+                    "reasoning_content": "not safe to expose by default"
+                }
+            }]
+        }))
+        .unwrap();
+        let mut slots = BTreeMap::new();
+        let mut pending_stop = None;
+        let mut buffer = VecDeque::new();
+        process_chunk(chunk, &mut slots, &mut pending_stop, &mut buffer);
+
+        assert!(buffer.is_empty());
+        assert!(pending_stop.is_none());
+        assert!(slots.is_empty());
     }
 
     #[test]

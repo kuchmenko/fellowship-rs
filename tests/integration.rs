@@ -8,9 +8,9 @@ use std::path::Path;
 use std::sync::{Arc, Once};
 
 use futures::StreamExt;
-use tkach::message::{Content, Message};
+use tkach::message::{Content, Message, ThinkingProvider};
 use tkach::provider::{Request, SystemBlock};
-use tkach::providers::{Anthropic, OpenAICompatible};
+use tkach::providers::{Anthropic, OpenAICompatible, OpenAIResponses};
 use tkach::tools::SubAgent;
 use tkach::{Agent, AgentResult, CancellationToken, LlmProvider, StreamEvent};
 
@@ -461,8 +461,9 @@ async fn smoke_openai_compatible_roundtrip() {
     };
 
     let base_url = std::env::var("OPENAI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-    let model = std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+        .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
+    let model =
+        std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "openai/gpt-5.5".to_string());
 
     let provider = OpenAICompatible::new(api_key).with_base_url(base_url);
 
@@ -566,7 +567,9 @@ async fn smoke_anthropic_stream_roundtrip() {
                 }
             }
             StreamEvent::Done => got_done = true,
-            StreamEvent::ToolCallPending { .. } => {}
+            StreamEvent::ThinkingDelta { .. }
+            | StreamEvent::ThinkingBlock { .. }
+            | StreamEvent::ToolCallPending { .. } => {}
         }
     }
 
@@ -604,8 +607,9 @@ async fn smoke_openai_compatible_stream_roundtrip() {
     };
 
     let base_url = std::env::var("OPENAI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
-    let model = std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "gpt-4o-mini".to_string());
+        .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
+    let model =
+        std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "openai/gpt-5.5".to_string());
 
     let provider = OpenAICompatible::new(api_key).with_base_url(base_url);
 
@@ -645,6 +649,85 @@ async fn smoke_openai_compatible_stream_roundtrip() {
         text.to_uppercase().contains("PONG"),
         "expected PONG in assembled text, got: {text:?}"
     );
+}
+
+/// Streams through OpenAI `/responses` and requires positive reasoning-summary events.
+///
+/// This smoke is opt-in via `OPENAI_RESPONSES_API_KEY` so a generic
+/// OpenRouter `OPENAI_API_KEY` does not accidentally make `cargo test -- --ignored`
+/// fail against a Chat Completions-only endpoint.
+#[tokio::test]
+#[ignore]
+async fn smoke_openai_responses_thinking_stream() {
+    load_env();
+    let api_key = match std::env::var("OPENAI_RESPONSES_API_KEY") {
+        Ok(k) if !k.is_empty() && !k.starts_with("sk-...") => k,
+        _ => {
+            eprintln!(
+                "skipping smoke_openai_responses_thinking_stream: \
+                 OPENAI_RESPONSES_API_KEY missing, empty, or still the placeholder"
+            );
+            return;
+        }
+    };
+
+    let base_url = std::env::var("OPENAI_RESPONSES_BASE_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+    let model = std::env::var("OPENAI_RESPONSES_MODEL").unwrap_or_else(|_| "gpt-5".to_string());
+    let effort =
+        std::env::var("OPENAI_RESPONSES_REASONING_EFFORT").unwrap_or_else(|_| "medium".into());
+    let summary =
+        std::env::var("OPENAI_RESPONSES_REASONING_SUMMARY").unwrap_or_else(|_| "detailed".into());
+
+    let provider = OpenAIResponses::new(api_key)
+        .with_base_url(base_url)
+        .with_reasoning(effort, summary);
+
+    let request = Request {
+        model: model.clone(),
+        system: Some(vec![SystemBlock::text(
+            "Answer in one sentence. Do not include reasoning in the final answer.",
+        )]),
+        messages: vec![Message::user_text(
+            "Solve carefully: a box has 3 red balls and 2 blue balls. \
+             Without replacement, what is P(two red draws)?",
+        )],
+        tools: vec![],
+        max_tokens: 1024,
+        temperature: None,
+    };
+
+    let mut stream = provider
+        .stream(request)
+        .await
+        .expect("open responses stream");
+    let mut text = String::new();
+    let mut thinking_delta_chars = 0usize;
+    let mut thinking_blocks = 0usize;
+    let mut got_done = false;
+
+    while let Some(event) = stream.next().await {
+        match event.expect("event ok") {
+            StreamEvent::ContentDelta(t) => text.push_str(&t),
+            StreamEvent::ThinkingDelta { text } => thinking_delta_chars += text.chars().count(),
+            StreamEvent::ThinkingBlock { provider, .. } => {
+                assert_eq!(provider, ThinkingProvider::OpenAIResponses);
+                thinking_blocks += 1;
+            }
+            StreamEvent::Done => got_done = true,
+            StreamEvent::ToolUse { .. } => panic!("no tools in this prompt"),
+            _ => {}
+        }
+    }
+
+    eprintln!(
+        "[smoke openai responses thinking | model={model}] \
+         thinking={thinking_delta_chars} chars / {thinking_blocks} blocks text={text:?}"
+    );
+
+    assert!(got_done, "should have received Done terminal");
+    assert!(thinking_blocks > 0, "should emit finalized thinking blocks");
+    assert!(!text.trim().is_empty(), "should emit final visible text");
 }
 
 // ---------------------------------------------------------------------------

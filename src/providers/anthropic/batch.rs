@@ -29,8 +29,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 use super::{
-    API_VERSION, Anthropic, ApiRequest, ApiResponse, build_request_body, classify_error,
-    convert_response, parse_retry_after,
+    API_VERSION, Anthropic, ApiRequest, ApiResponse, build_request_body_with_thinking,
+    classify_error, convert_response, parse_retry_after,
 };
 use crate::error::ProviderError;
 use crate::provider::{Request, Response};
@@ -333,7 +333,7 @@ impl Anthropic {
             .iter()
             .map(|r| RequestEntry {
                 custom_id: &r.custom_id,
-                params: build_request_body(&r.params),
+                params: build_request_body_with_thinking(&r.params, self.thinking.clone()),
             })
             .collect();
         let body = CreateBatchBody { requests: entries };

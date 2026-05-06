@@ -66,12 +66,12 @@ async fn main() -> anyhow::Result<()> {
                 │  Provider  │                 │   ToolExecutor    │
                 │            │                 │ ┌───────────────┐ │
                 │ Anthropic  │                 │ │  ToolPolicy   │ │
-                │ OpenAI-    │                 │ ├───────────────┤ │
-                │ compatible │                 │ │ApprovalHandler│ │
-                │ Mock       │                 │ ├───────────────┤ │
-                │            │                 │ │ ToolRegistry  │ │
-                └────────────┘                 │ └───────────────┘ │
-                                               └─────────┬─────────┘
+                │ OpenAI     │                 │ ├───────────────┤ │
+                │ Responses/ │                 │ │ApprovalHandler│ │
+                │ compatible │                 │ ├───────────────┤ │
+                │ Mock       │                 │ │ ToolRegistry  │ │
+                │            │                 │ └───────────────┘ │
+                └────────────┘                 └─────────┬─────────┘
                                                          │
                                               read-only batches in
                                               parallel via join_all,
@@ -96,15 +96,27 @@ async fn main() -> anyhow::Result<()> {
 ## Providers
 
 ```rust
-use tkach::providers::{Anthropic, OpenAICompatible};
+use tkach::providers::{Anthropic, OpenAICompatible, OpenAIResponses};
 
 // Anthropic
 let p = Anthropic::from_env();   // ANTHROPIC_API_KEY
 
-// OpenAI itself
+// Anthropic adaptive thinking (recommended on Claude Sonnet/Opus 4.6+)
+let p = Anthropic::from_env()
+    .with_adaptive_thinking_effort("high");
+
+// Anthropic manual thinking budget (older/fixed-budget mode)
+let p = Anthropic::from_env()
+    .with_thinking_budget(1024);
+
+// OpenAI Chat Completions-compatible API: text + tool calls, no standard thinking.
 let p = OpenAICompatible::from_env();   // OPENAI_API_KEY
 
-// Any OpenAI-compatible endpoint:
+// OpenAI Responses API: use this for OpenAI reasoning-summary streams.
+let p = OpenAIResponses::from_env()
+    .with_reasoning("medium", "detailed");
+
+// Any OpenAI-compatible Chat Completions endpoint:
 //   OpenRouter
 let p = OpenAICompatible::new(key)
     .with_base_url("https://openrouter.ai/api/v1");
@@ -174,7 +186,14 @@ let mut stream = agent.stream(history, CancellationToken::new());
 while let Some(event) = stream.next().await {
     match event? {
         StreamEvent::ContentDelta(text) => {
-            print!("{text}");                    // live tokens
+            print!("{text}");                    // visible answer tokens
+        }
+        StreamEvent::ThinkingDelta { text } => {
+            eprint!("[thinking] {text}");         // provider-returned summary, not final text
+        }
+        StreamEvent::ThinkingBlock { .. } => {
+            // Finalized thinking/reasoning block with replay metadata.
+            // Persisted in AgentResult.new_messages, excluded from AgentResult.text.
         }
         StreamEvent::ToolUse { id, name, input } => {
             // Atomic: parser accumulated all `input_json_delta` chunks
@@ -192,6 +211,10 @@ while let Some(event) = stream.next().await {
 
 let result = stream.into_result().await?;        // final AgentResult
 ```
+
+`ThinkingDelta` and `ThinkingBlock` are public `StreamEvent` variants. Downstream exhaustive matches must add arms for them when upgrading.
+
+Provider boundary: Anthropic thinking requires `Anthropic::with_adaptive_thinking*` or `with_thinking_budget(...)`; OpenAI thinking requires `OpenAIResponses` (`/responses` with `reasoning.summary`). `OpenAICompatible` is Chat Completions and intentionally asserts the no-thinking contract because that wire format has no standard reasoning-summary event.
 
 Backpressure is real: a slow consumer parks the producer task, which closes the SSE read side, which lets the OS shrink the TCP receive window — all the way back to the LLM server. Cancellation works mid-stream too: `cancel.cancel()` aborts the current SSE pull within milliseconds via `tokio::select!`.
 
@@ -262,23 +285,24 @@ Long-running tools should `tokio::select!` on `ctx.cancel.cancelled()` and retur
 
 Each runnable demo also asserts its invariants — `cargo run --example NAME` either prints the demo and exits 0, or panics with a clear message.
 
-| Example | What it shows |
-|---|---|
-| [`basic.rs`](./examples/basic.rs) | Minimal `agent.run` |
-| [`streaming.rs`](./examples/streaming.rs) | Live token streaming |
-| [`streaming_multi_tool.rs`](./examples/streaming_multi_tool.rs) | Multi-turn write→edit→read chain via `Agent::stream` |
-| [`streaming_subagent.rs`](./examples/streaming_subagent.rs) | Sonnet streams, delegates to a Haiku sub-agent |
-| [`streaming_openai_tools.rs`](./examples/streaming_openai_tools.rs) | OpenAI-compatible tool call (works through OpenRouter) |
-| [`streaming_cancel.rs`](./examples/streaming_cancel.rs) | Cancel mid-generation, partial text preserved |
-| [`streaming_resilience.rs`](./examples/streaming_resilience.rs) | Tool failure + cancel-during-tool + multi-block turns |
-| [`approval_flow.rs`](./examples/approval_flow.rs) | Live denial flow with custom `ApprovalHandler` |
-| [`parallel_tools.rs`](./examples/parallel_tools.rs) | Read-only tools running in parallel |
-| [`custom_tool.rs`](./examples/custom_tool.rs) | Defining your own tool |
-| [`anthropic_batch.rs`](./examples/anthropic_batch.rs) | Batch API happy path: submit → poll → stream results (50% off, 24h async) |
-| [`anthropic_batch_cancel.rs`](./examples/anthropic_batch_cancel.rs) | Batch cancel-then-fetch-partial — mix of `Succeeded` and `Canceled` outcomes |
-| [`anthropic_batch_mixed.rs`](./examples/anthropic_batch_mixed.rs) | Per-row error isolation — bad request rides alongside successes as `Errored` |
+- [`basic.rs`](./examples/basic.rs) — Minimal `agent.run`.
+- [`streaming.rs`](./examples/streaming.rs) — Anthropic streaming with visible/thinking event handling.
+- [`streaming_anthropic_thinking.rs`](./examples/streaming_anthropic_thinking.rs) — Anthropic manual extended-thinking stream; asserts positive thinking blocks.
+- [`streaming_anthropic_adaptive_thinking.rs`](./examples/streaming_anthropic_adaptive_thinking.rs) — Anthropic adaptive-thinking stream; asserts positive thinking blocks.
+- [`streaming_multi_tool.rs`](./examples/streaming_multi_tool.rs) — Multi-turn write→edit→read chain via `Agent::stream`.
+- [`streaming_subagent.rs`](./examples/streaming_subagent.rs) — Sonnet streams, delegates to a Haiku sub-agent.
+- [`streaming_openai_tools.rs`](./examples/streaming_openai_tools.rs) — OpenAI-compatible tool call + no-thinking contract through Chat Completions.
+- [`streaming_openai_responses_thinking.rs`](./examples/streaming_openai_responses_thinking.rs) — OpenAI Responses reasoning-summary stream; asserts positive thinking blocks.
+- [`streaming_cancel.rs`](./examples/streaming_cancel.rs) — Cancel mid-generation, partial text preserved.
+- [`streaming_resilience.rs`](./examples/streaming_resilience.rs) — Tool failure + cancel-during-tool + multi-block turns.
+- [`approval_flow.rs`](./examples/approval_flow.rs) — Live denial flow with custom `ApprovalHandler`.
+- [`parallel_tools.rs`](./examples/parallel_tools.rs) — Read-only tools running in parallel.
+- [`custom_tool.rs`](./examples/custom_tool.rs) — Defining your own tool.
+- [`anthropic_batch.rs`](./examples/anthropic_batch.rs) — Batch API happy path: submit → poll → stream results (50% off, 24h async).
+- [`anthropic_batch_cancel.rs`](./examples/anthropic_batch_cancel.rs) — Batch cancel-then-fetch-partial; mixed `Succeeded` and `Canceled` outcomes.
+- [`anthropic_batch_mixed.rs`](./examples/anthropic_batch_mixed.rs) — Per-row error isolation; bad request rides alongside successes as `Errored`.
 
-Examples that talk to live APIs read `ANTHROPIC_API_KEY` (and optionally `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `OPENAI_SMOKE_MODEL`) from `.env` — see [`.env.example`](./.env.example).
+Examples that talk to live APIs read `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, and optional OpenAI override vars from `.env` — see [`.env.example`](./.env.example).
 
 ## Testing
 

@@ -7,7 +7,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::ProviderError;
-use crate::message::{CacheControl, Content, StopReason, Usage};
+use crate::message::{
+    CacheControl, Content, StopReason, ThinkingMetadata, ThinkingProvider, Usage,
+};
 use crate::provider::{LlmProvider, Request, Response, SystemBlock};
 use crate::stream::{ProviderEventStream, StreamEvent};
 
@@ -23,6 +25,31 @@ pub struct Anthropic {
     api_key: String,
     client: reqwest::Client,
     base_url: String,
+    thinking: Option<AnthropicThinkingConfig>,
+}
+
+#[derive(Debug, Clone)]
+pub(crate) enum AnthropicThinkingConfig {
+    Manual {
+        budget_tokens: u32,
+    },
+    Adaptive {
+        effort: Option<String>,
+        display: AnthropicThinkingDisplay,
+    },
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum AnthropicThinkingDisplay {
+    Summarized,
+}
+
+impl AnthropicThinkingDisplay {
+    fn as_wire_str(self) -> &'static str {
+        match self {
+            AnthropicThinkingDisplay::Summarized => "summarized",
+        }
+    }
 }
 
 impl Anthropic {
@@ -31,6 +58,7 @@ impl Anthropic {
             api_key: api_key.into(),
             client: reqwest::Client::new(),
             base_url: DEFAULT_BASE_URL.to_string(),
+            thinking: None,
         }
     }
 
@@ -50,6 +78,44 @@ impl Anthropic {
         self
     }
 
+    /// Enable Anthropic extended thinking with a manual token budget.
+    ///
+    /// Anthropic requires `budget_tokens >= 1024` and less than
+    /// `max_tokens`; invalid combinations are rejected by the API. When
+    /// enabled, tkach omits `temperature` because Anthropic marks it as
+    /// incompatible with thinking.
+    pub fn with_thinking_budget(mut self, budget_tokens: u32) -> Self {
+        self.thinking = Some(AnthropicThinkingConfig::Manual { budget_tokens });
+        self
+    }
+
+    /// Enable Anthropic adaptive thinking.
+    ///
+    /// Recommended by Anthropic for Claude Opus 4.7+, Opus 4.6, and
+    /// Sonnet 4.6. Adaptive mode lets Claude decide whether and how much
+    /// to think per request. tkach requests summarized display so
+    /// streaming consumers can receive positive `ThinkingDelta` events
+    /// on models whose API default is otherwise omitted thinking.
+    pub fn with_adaptive_thinking(mut self) -> Self {
+        self.thinking = Some(AnthropicThinkingConfig::Adaptive {
+            effort: None,
+            display: AnthropicThinkingDisplay::Summarized,
+        });
+        self
+    }
+
+    /// Enable adaptive thinking with explicit effort.
+    ///
+    /// Anthropic effort values are model-dependent; documented values are
+    /// `low`, `medium`, `high`, `xhigh`, and `max`.
+    pub fn with_adaptive_thinking_effort(mut self, effort: impl Into<String>) -> Self {
+        self.thinking = Some(AnthropicThinkingConfig::Adaptive {
+            effort: Some(effort.into()),
+            display: AnthropicThinkingDisplay::Summarized,
+        });
+        self
+    }
+
     /// Endpoint URL for `complete` / `stream` (`{base}/v1/messages`).
     pub(crate) fn messages_url(&self) -> String {
         format!("{}/v1/messages", self.base_url)
@@ -64,7 +130,7 @@ impl Anthropic {
 #[async_trait]
 impl LlmProvider for Anthropic {
     async fn stream(&self, request: Request) -> Result<ProviderEventStream, ProviderError> {
-        let mut body = build_request_body(&request);
+        let mut body = build_request_body_with_thinking(&request, self.thinking.clone());
         body.stream = true;
 
         let response = self
@@ -94,7 +160,7 @@ impl LlmProvider for Anthropic {
     }
 
     async fn complete(&self, request: Request) -> Result<Response, ProviderError> {
-        let body = build_request_body(&request);
+        let body = build_request_body_with_thinking(&request, self.thinking.clone());
 
         let response = self
             .client
@@ -223,6 +289,15 @@ struct MessageStartPayload {
 enum ContentBlockStart {
     #[serde(rename = "text")]
     Text,
+    #[serde(rename = "thinking")]
+    Thinking {
+        #[serde(default)]
+        thinking: String,
+        #[serde(default)]
+        signature: String,
+    },
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -236,9 +311,13 @@ enum ContentBlockStart {
 #[serde(tag = "type")]
 enum BlockDelta {
     #[serde(rename = "text_delta")]
-    TextDelta { text: String },
+    Text { text: String },
+    #[serde(rename = "thinking_delta")]
+    Thinking { thinking: String },
+    #[serde(rename = "signature_delta")]
+    Signature { signature: String },
     #[serde(rename = "input_json_delta")]
-    InputJsonDelta { partial_json: String },
+    InputJson { partial_json: String },
 }
 
 #[derive(Deserialize)]
@@ -260,6 +339,13 @@ struct ErrorPayload {
 /// fragments and emit one atomic `ToolUse` event on `content_block_stop`.
 enum BlockState {
     Text,
+    Thinking {
+        text_buf: String,
+        signature: String,
+    },
+    RedactedThinking {
+        data: String,
+    },
     ToolUse {
         id: String,
         name: String,
@@ -355,6 +441,16 @@ fn process_payload(
         } => {
             let state = match content_block {
                 ContentBlockStart::Text => BlockState::Text,
+                ContentBlockStart::Thinking {
+                    thinking,
+                    signature,
+                } => BlockState::Thinking {
+                    text_buf: thinking,
+                    signature,
+                },
+                ContentBlockStart::RedactedThinking { data } => {
+                    BlockState::RedactedThinking { data }
+                }
                 ContentBlockStart::ToolUse { id, name, input } => BlockState::ToolUse {
                     id,
                     name,
@@ -371,24 +467,59 @@ fn process_payload(
             blocks.insert(index, state);
         }
         StreamingPayload::ContentBlockDelta { index, delta } => match delta {
-            BlockDelta::TextDelta { text } => {
+            BlockDelta::Text { text } => {
                 buffer.push_back(Ok(StreamEvent::ContentDelta(text)));
             }
-            BlockDelta::InputJsonDelta { partial_json } => {
+            BlockDelta::Thinking { thinking } => {
+                if let Some(BlockState::Thinking { text_buf, .. }) = blocks.get_mut(&index) {
+                    text_buf.push_str(&thinking);
+                }
+                buffer.push_back(Ok(StreamEvent::ThinkingDelta { text: thinking }));
+            }
+            BlockDelta::Signature { signature } => {
+                if let Some(BlockState::Thinking { signature: sig, .. }) = blocks.get_mut(&index) {
+                    sig.push_str(&signature);
+                }
+            }
+            BlockDelta::InputJson { partial_json } => {
                 if let Some(BlockState::ToolUse { json_buf, .. }) = blocks.get_mut(&index) {
                     json_buf.push_str(&partial_json);
                 }
             }
         },
         StreamingPayload::ContentBlockStop { index } => {
-            if let Some(BlockState::ToolUse { id, name, json_buf }) = blocks.remove(&index) {
-                let input: Value = if json_buf.trim().is_empty() {
-                    Value::Object(Default::default())
-                } else {
-                    serde_json::from_str(&json_buf)
-                        .unwrap_or_else(|_| Value::String(json_buf.clone()))
-                };
-                buffer.push_back(Ok(StreamEvent::ToolUse { id, name, input }));
+            if let Some(block) = blocks.remove(&index) {
+                match block {
+                    BlockState::Text => {}
+                    BlockState::Thinking {
+                        text_buf,
+                        signature,
+                    } => {
+                        buffer.push_back(Ok(StreamEvent::ThinkingBlock {
+                            text: text_buf,
+                            provider: ThinkingProvider::Anthropic,
+                            metadata: ThinkingMetadata::Anthropic {
+                                signature: (!signature.is_empty()).then_some(signature),
+                            },
+                        }));
+                    }
+                    BlockState::RedactedThinking { data } => {
+                        buffer.push_back(Ok(StreamEvent::ThinkingBlock {
+                            text: String::new(),
+                            provider: ThinkingProvider::Anthropic,
+                            metadata: ThinkingMetadata::AnthropicRedacted { data },
+                        }));
+                    }
+                    BlockState::ToolUse { id, name, json_buf } => {
+                        let input: Value = if json_buf.trim().is_empty() {
+                            Value::Object(Default::default())
+                        } else {
+                            serde_json::from_str(&json_buf)
+                                .unwrap_or_else(|_| Value::String(json_buf.clone()))
+                        };
+                        buffer.push_back(Ok(StreamEvent::ToolUse { id, name, input }));
+                    }
+                }
             }
         }
         StreamingPayload::MessageDelta { delta, usage } => {
@@ -452,10 +583,29 @@ pub(crate) struct ApiRequest {
     pub(crate) tools: Vec<ApiTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) thinking: Option<ApiThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output_config: Option<ApiOutputConfig>,
     /// `stream: true` switches the response to SSE; default false for
     /// `complete()`. Always false on the batch path.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) stream: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ApiThinkingConfig {
+    #[serde(rename = "type")]
+    pub(crate) kind: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) budget_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) display: Option<&'static str>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ApiOutputConfig {
+    pub(crate) effort: String,
 }
 
 #[derive(Serialize)]
@@ -473,6 +623,16 @@ pub(crate) enum ApiContent {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
     },
+
+    #[serde(rename = "thinking")]
+    Thinking {
+        thinking: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        signature: Option<String>,
+    },
+
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
 
     #[serde(rename = "tool_use")]
     ToolUse {
@@ -530,18 +690,16 @@ pub(crate) struct ApiUsage {
 
 // --- Conversion ---
 
+#[cfg(test)]
 pub(crate) fn build_request_body(request: &Request) -> ApiRequest {
-    let messages = request
-        .messages
-        .iter()
-        .map(|msg| ApiMessage {
-            role: match msg.role {
-                crate::message::Role::User => "user".to_string(),
-                crate::message::Role::Assistant => "assistant".to_string(),
-            },
-            content: msg.content.iter().map(content_to_api).collect(),
-        })
-        .collect();
+    build_request_body_with_thinking(request, None)
+}
+
+pub(crate) fn build_request_body_with_thinking(
+    request: &Request,
+    thinking: Option<AnthropicThinkingConfig>,
+) -> ApiRequest {
+    let messages = request.messages.iter().filter_map(message_to_api).collect();
 
     let tools = request
         .tools
@@ -553,6 +711,9 @@ pub(crate) fn build_request_body(request: &Request) -> ApiRequest {
             cache_control: t.cache_control.clone(),
         })
         .collect();
+
+    let api_thinking = thinking.as_ref().map(api_thinking_config);
+    let output_config = thinking.as_ref().and_then(output_config);
 
     ApiRequest {
         model: request.model.clone(),
@@ -569,36 +730,95 @@ pub(crate) fn build_request_body(request: &Request) -> ApiRequest {
                 .collect()
         }),
         tools,
-        temperature: request.temperature,
+        temperature: thinking.is_none().then_some(request.temperature).flatten(),
+        thinking: api_thinking,
+        output_config,
         stream: false,
     }
 }
 
-fn content_to_api(content: &Content) -> ApiContent {
+fn api_thinking_config(config: &AnthropicThinkingConfig) -> ApiThinkingConfig {
+    match config {
+        AnthropicThinkingConfig::Manual { budget_tokens } => ApiThinkingConfig {
+            kind: "enabled",
+            budget_tokens: Some(*budget_tokens),
+            display: None,
+        },
+        AnthropicThinkingConfig::Adaptive { display, .. } => ApiThinkingConfig {
+            kind: "adaptive",
+            budget_tokens: None,
+            display: Some(display.as_wire_str()),
+        },
+    }
+}
+
+fn output_config(config: &AnthropicThinkingConfig) -> Option<ApiOutputConfig> {
+    match config {
+        AnthropicThinkingConfig::Adaptive {
+            effort: Some(effort),
+            ..
+        } => Some(ApiOutputConfig {
+            effort: effort.clone(),
+        }),
+        AnthropicThinkingConfig::Manual { .. }
+        | AnthropicThinkingConfig::Adaptive { effort: None, .. } => None,
+    }
+}
+
+fn message_to_api(msg: &crate::message::Message) -> Option<ApiMessage> {
+    let content: Vec<ApiContent> = msg.content.iter().filter_map(content_to_api).collect();
+    if content.is_empty() {
+        return None;
+    }
+
+    Some(ApiMessage {
+        role: match msg.role {
+            crate::message::Role::User => "user".to_string(),
+            crate::message::Role::Assistant => "assistant".to_string(),
+        },
+        content,
+    })
+}
+
+fn content_to_api(content: &Content) -> Option<ApiContent> {
     match content {
         Content::Text {
             text,
             cache_control,
-        } => ApiContent::Text {
+        } => Some(ApiContent::Text {
             text: text.clone(),
             cache_control: cache_control.clone(),
-        },
-        Content::ToolUse { id, name, input } => ApiContent::ToolUse {
+        }),
+        Content::Thinking {
+            text,
+            provider: ThinkingProvider::Anthropic,
+            metadata: ThinkingMetadata::Anthropic { signature },
+        } => Some(ApiContent::Thinking {
+            thinking: text.clone(),
+            signature: signature.clone(),
+        }),
+        Content::Thinking {
+            provider: ThinkingProvider::Anthropic,
+            metadata: ThinkingMetadata::AnthropicRedacted { data },
+            ..
+        } => Some(ApiContent::RedactedThinking { data: data.clone() }),
+        Content::Thinking { .. } => None,
+        Content::ToolUse { id, name, input } => Some(ApiContent::ToolUse {
             id: id.clone(),
             name: name.clone(),
             input: input.clone(),
-        },
+        }),
         Content::ToolResult {
             tool_use_id,
             content,
             is_error,
             cache_control,
-        } => ApiContent::ToolResult {
+        } => Some(ApiContent::ToolResult {
             tool_use_id: tool_use_id.clone(),
             content: content.clone(),
             is_error: *is_error,
             cache_control: cache_control.clone(),
-        },
+        }),
     }
 }
 
@@ -613,6 +833,19 @@ pub(crate) fn convert_response(api: ApiResponse) -> Response {
             } => Content::Text {
                 text,
                 cache_control,
+            },
+            ApiContent::Thinking {
+                thinking,
+                signature,
+            } => Content::Thinking {
+                text: thinking,
+                provider: ThinkingProvider::Anthropic,
+                metadata: ThinkingMetadata::Anthropic { signature },
+            },
+            ApiContent::RedactedThinking { data } => Content::Thinking {
+                text: String::new(),
+                provider: ThinkingProvider::Anthropic,
+                metadata: ThinkingMetadata::AnthropicRedacted { data },
             },
             ApiContent::ToolUse { id, name, input } => Content::ToolUse { id, name, input },
             ApiContent::ToolResult {
@@ -780,6 +1013,191 @@ mod tests {
     }
 
     #[test]
+    fn request_with_thinking_budget_serializes_top_level_thinking() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user_text("solve")],
+            tools: vec![],
+            max_tokens: 2048,
+            temperature: None,
+        };
+        let body = build_request_body_with_thinking(
+            &req,
+            Some(AnthropicThinkingConfig::Manual {
+                budget_tokens: 1024,
+            }),
+        );
+        let json = serde_json::to_value(&body).unwrap();
+
+        assert_eq!(json["thinking"]["type"], "enabled");
+        assert_eq!(json["thinking"]["budget_tokens"], 1024);
+        assert!(json["thinking"].get("display").is_none());
+    }
+
+    #[test]
+    fn request_with_adaptive_thinking_serializes_display_and_effort() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user_text("solve")],
+            tools: vec![],
+            max_tokens: 2048,
+            temperature: None,
+        };
+        let body = build_request_body_with_thinking(
+            &req,
+            Some(AnthropicThinkingConfig::Adaptive {
+                effort: Some("high".into()),
+                display: AnthropicThinkingDisplay::Summarized,
+            }),
+        );
+        let json = serde_json::to_value(&body).unwrap();
+
+        assert_eq!(json["thinking"]["type"], "adaptive");
+        assert_eq!(json["thinking"]["display"], "summarized");
+        assert!(json["thinking"].get("budget_tokens").is_none());
+        assert_eq!(json["output_config"]["effort"], "high");
+    }
+
+    #[test]
+    fn request_with_thinking_omits_temperature() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user_text("solve")],
+            tools: vec![],
+            max_tokens: 2048,
+            temperature: Some(0.2),
+        };
+        let body = build_request_body_with_thinking(
+            &req,
+            Some(AnthropicThinkingConfig::Manual {
+                budget_tokens: 1024,
+            }),
+        );
+        let json = serde_json::to_value(&body).unwrap();
+
+        assert!(json.get("temperature").is_none());
+    }
+
+    #[test]
+    fn anthropic_thinking_content_serializes_with_signature() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::assistant(vec![
+                Content::thinking(
+                    "reason",
+                    ThinkingProvider::Anthropic,
+                    ThinkingMetadata::anthropic(Some("sig".into())),
+                ),
+                Content::text("visible"),
+            ])],
+            tools: vec![],
+            max_tokens: 10,
+            temperature: None,
+        };
+        let body = build_request_body(&req);
+        let json = serde_json::to_value(&body).unwrap();
+        let content = json["messages"][0]["content"].as_array().unwrap();
+
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["thinking"], "reason");
+        assert_eq!(content[0]["signature"], "sig");
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "visible");
+    }
+
+    #[test]
+    fn anthropic_redacted_thinking_content_round_trips() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::assistant(vec![Content::thinking(
+                "",
+                ThinkingProvider::Anthropic,
+                ThinkingMetadata::anthropic_redacted("opaque"),
+            )])],
+            tools: vec![],
+            max_tokens: 10,
+            temperature: None,
+        };
+        let body = build_request_body(&req);
+        let json = serde_json::to_value(&body).unwrap();
+        let block = &json["messages"][0]["content"][0];
+        assert_eq!(block["type"], "redacted_thinking");
+        assert_eq!(block["data"], "opaque");
+
+        let raw = json!({
+            "content": [{"type":"redacted_thinking","data":"opaque"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 1, "output_tokens": 1}
+        });
+        let api: ApiResponse = serde_json::from_value(raw).unwrap();
+        assert!(matches!(
+            &convert_response(api).content[0],
+            Content::Thinking {
+                text,
+                provider: ThinkingProvider::Anthropic,
+                metadata: ThinkingMetadata::AnthropicRedacted { data },
+            } if text.is_empty() && data == "opaque"
+        ));
+    }
+
+    #[test]
+    fn foreign_thinking_only_message_is_not_serialized_as_empty_message() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![
+                Message::assistant(vec![Content::thinking(
+                    "foreign",
+                    ThinkingProvider::OpenAIResponses,
+                    ThinkingMetadata::openai_responses(Some("rs_1".into()), None, 0, None),
+                )]),
+                Message::user_text("next"),
+            ],
+            tools: vec![],
+            max_tokens: 10,
+            temperature: None,
+        };
+        let body = build_request_body(&req);
+        let json = serde_json::to_value(&body).unwrap();
+        let messages = json["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"][0]["text"], "next");
+    }
+
+    #[test]
+    fn anthropic_provider_with_mismatched_metadata_is_dropped() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![
+                Message::assistant(vec![Content::thinking(
+                    "bad metadata",
+                    ThinkingProvider::Anthropic,
+                    ThinkingMetadata::None,
+                )]),
+                Message::user_text("next"),
+            ],
+            tools: vec![],
+            max_tokens: 10,
+            temperature: None,
+        };
+        let body = build_request_body(&req);
+        let json = serde_json::to_value(&body).unwrap();
+        let messages = json["messages"].as_array().unwrap();
+
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"][0]["text"], "next");
+    }
+
+    #[test]
     fn response_with_cache_usage_parses_all_four_fields() {
         let raw = json!({
             "content": [{"type":"text","text":"ok"}],
@@ -810,6 +1228,156 @@ mod tests {
         let resp = convert_response(api);
         assert_eq!(resp.usage.cache_creation_input_tokens, 0);
         assert_eq!(resp.usage.cache_read_input_tokens, 0);
+    }
+
+    #[test]
+    fn streaming_thinking_delta_and_signature_emit_final_block() {
+        use std::collections::VecDeque;
+        let mut blocks: HashMap<usize, BlockState> = HashMap::new();
+        let mut buffer: VecDeque<Result<StreamEvent, ProviderError>> = VecDeque::new();
+        let mut running = Usage::default();
+
+        process_payload(
+            StreamingPayload::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStart::Thinking {
+                    thinking: String::new(),
+                    signature: String::new(),
+                },
+            },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+        process_payload(
+            StreamingPayload::ContentBlockDelta {
+                index: 0,
+                delta: BlockDelta::Thinking {
+                    thinking: "reason".into(),
+                },
+            },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+        process_payload(
+            StreamingPayload::ContentBlockDelta {
+                index: 0,
+                delta: BlockDelta::Signature {
+                    signature: "sig".into(),
+                },
+            },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+        process_payload(
+            StreamingPayload::ContentBlockStop { index: 0 },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+
+        assert!(matches!(
+            buffer.pop_front().unwrap().unwrap(),
+            StreamEvent::ThinkingDelta { text } if text == "reason"
+        ));
+        assert!(matches!(
+            buffer.pop_front().unwrap().unwrap(),
+            StreamEvent::ThinkingBlock {
+                text,
+                provider: ThinkingProvider::Anthropic,
+                metadata: ThinkingMetadata::Anthropic {
+                    signature: Some(signature),
+                },
+            } if text == "reason" && signature == "sig"
+        ));
+    }
+
+    #[test]
+    fn streaming_redacted_thinking_emits_final_block() {
+        use std::collections::VecDeque;
+        let mut blocks: HashMap<usize, BlockState> = HashMap::new();
+        let mut buffer: VecDeque<Result<StreamEvent, ProviderError>> = VecDeque::new();
+        let mut running = Usage::default();
+
+        process_payload(
+            StreamingPayload::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStart::RedactedThinking {
+                    data: "opaque".into(),
+                },
+            },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+        process_payload(
+            StreamingPayload::ContentBlockStop { index: 0 },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+
+        assert!(matches!(
+            buffer.pop_front().unwrap().unwrap(),
+            StreamEvent::ThinkingBlock {
+                text,
+                provider: ThinkingProvider::Anthropic,
+                metadata: ThinkingMetadata::AnthropicRedacted { data },
+            } if text.is_empty() && data == "opaque"
+        ));
+        assert!(buffer.is_empty());
+    }
+
+    #[test]
+    fn streaming_signature_without_thinking_delta_preserves_empty_block() {
+        use std::collections::VecDeque;
+        let mut blocks: HashMap<usize, BlockState> = HashMap::new();
+        let mut buffer: VecDeque<Result<StreamEvent, ProviderError>> = VecDeque::new();
+        let mut running = Usage::default();
+
+        process_payload(
+            StreamingPayload::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlockStart::Thinking {
+                    thinking: String::new(),
+                    signature: String::new(),
+                },
+            },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+        process_payload(
+            StreamingPayload::ContentBlockDelta {
+                index: 0,
+                delta: BlockDelta::Signature {
+                    signature: "sig-only".into(),
+                },
+            },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+        process_payload(
+            StreamingPayload::ContentBlockStop { index: 0 },
+            &mut blocks,
+            &mut buffer,
+            &mut running,
+        );
+
+        assert!(matches!(
+            buffer.pop_front().unwrap().unwrap(),
+            StreamEvent::ThinkingBlock {
+                text,
+                provider: ThinkingProvider::Anthropic,
+                metadata: ThinkingMetadata::Anthropic {
+                    signature: Some(signature),
+                },
+            } if text.is_empty() && signature == "sig-only"
+        ));
+        assert!(buffer.is_empty());
     }
 
     #[test]

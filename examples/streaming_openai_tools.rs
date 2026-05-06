@@ -7,10 +7,15 @@
 //! across chunks, and on `[DONE]` (or `finish_reason: tool_calls`) we
 //! emit one atomic `StreamEvent::ToolUse` with parsed input.
 //!
+//! Chat Completions has no standard thinking block. The consumer still
+//! handles `ThinkingDelta` / `ThinkingBlock` so UI code can share one
+//! event loop across providers, then asserts this provider does not leak
+//! non-standard reasoning fields by default.
+//!
 //! Defaults to OpenRouter; override base URL + model via env. Examples:
 //!
 //!   OPENAI_BASE_URL=https://openrouter.ai/api/v1
-//!   OPENAI_SMOKE_MODEL=openai/gpt-4o-mini       # works well
+//!   OPENAI_SMOKE_MODEL=openai/gpt-5.5
 //!   OPENAI_SMOKE_MODEL=anthropic/claude-haiku-4-5
 //!   OPENAI_SMOKE_MODEL=moonshotai/kimi-k2.6     # works, may need verbose system
 //!
@@ -39,9 +44,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let base_url = std::env::var("OPENAI_BASE_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1".to_string());
+        .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
     let model =
-        std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "openai/gpt-4o-mini".to_string());
+        std::env::var("OPENAI_SMOKE_MODEL").unwrap_or_else(|_| "openai/gpt-5.5".to_string());
 
     eprintln!("[model: {model}]  [base: {base_url}]");
     eprintln!();
@@ -80,6 +85,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut tools_called = Vec::new();
     let mut tool_inputs: Vec<String> = Vec::new();
     let mut delta_count = 0usize;
+    let mut thinking_delta_chars = 0usize;
+    let mut thinking_blocks = 0usize;
 
     while let Some(event) = stream.next().await {
         match event? {
@@ -87,6 +94,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 delta_count += 1;
                 print!("{text}");
                 std::io::stdout().flush()?;
+            }
+            StreamEvent::ThinkingDelta { text } => {
+                thinking_delta_chars += text.chars().count();
+                eprintln!("\n[thinking delta: {} chars]", text.chars().count());
+            }
+            StreamEvent::ThinkingBlock { text, provider, .. } => {
+                thinking_blocks += 1;
+                eprintln!(
+                    "\n[thinking block: {provider:?}, {} chars; metadata preserved]",
+                    text.chars().count()
+                );
             }
             StreamEvent::ToolUse { name, input, .. } => {
                 eprintln!("\n[tool: {name}  args: {input}]");
@@ -105,6 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("tools called : {tools_called:?}");
     eprintln!("tool inputs  : {tool_inputs:?}");
     eprintln!("delta count  : {delta_count}");
+    eprintln!("thinking     : {thinking_delta_chars} chars / {thinking_blocks} blocks");
     eprintln!(
         "tokens       : {} in / {} out",
         result.usage.input_tokens, result.usage.output_tokens
@@ -117,6 +136,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tools_called.iter().any(|t| t == "bash"),
         "expected `bash` tool call from streaming OpenAI-compat provider, \
          got: {tools_called:?}"
+    );
+    assert_eq!(
+        thinking_delta_chars, 0,
+        "OpenAI-compatible Chat Completions should not expose non-standard reasoning by default"
+    );
+    assert_eq!(
+        thinking_blocks, 0,
+        "OpenAI-compatible Chat Completions should not finalize thinking blocks by default"
     );
 
     // The atomic ToolUse must have parsed arguments from the SSE
