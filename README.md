@@ -101,6 +101,10 @@ use tkach::providers::{Anthropic, OpenAICompatible, OpenAIResponses};
 // Anthropic
 let p = Anthropic::from_env();   // ANTHROPIC_API_KEY
 
+// Anthropic extended thinking
+let p = Anthropic::from_env()
+    .with_thinking_budget(1024);
+
 // OpenAI Chat Completions-compatible API: text + tool calls, no standard thinking.
 let p = OpenAICompatible::from_env();   // OPENAI_API_KEY
 
@@ -206,7 +210,7 @@ let result = stream.into_result().await?;        // final AgentResult
 
 `ThinkingDelta` and `ThinkingBlock` are public `StreamEvent` variants. Downstream exhaustive matches must add arms for them when upgrading.
 
-Provider boundary: OpenAI thinking requires `OpenAIResponses` (`/responses` with `reasoning.summary`). `OpenAICompatible` is Chat Completions and intentionally asserts the no-thinking contract because that wire format has no standard reasoning-summary event.
+Provider boundary: Anthropic thinking requires `Anthropic::with_thinking_budget(...)`; OpenAI thinking requires `OpenAIResponses` (`/responses` with `reasoning.summary`). `OpenAICompatible` is Chat Completions and intentionally asserts the no-thinking contract because that wire format has no standard reasoning-summary event.
 
 Backpressure is real: a slow consumer parks the producer task, which closes the SSE read side, which lets the OS shrink the TCP receive window — all the way back to the LLM server. Cancellation works mid-stream too: `cancel.cancel()` aborts the current SSE pull within milliseconds via `tokio::select!`.
 
@@ -279,6 +283,7 @@ Each runnable demo also asserts its invariants — `cargo run --example NAME` ei
 
 - [`basic.rs`](./examples/basic.rs) — Minimal `agent.run`.
 - [`streaming.rs`](./examples/streaming.rs) — Anthropic streaming with visible/thinking event handling.
+- [`streaming_anthropic_thinking.rs`](./examples/streaming_anthropic_thinking.rs) — Anthropic extended-thinking stream; asserts positive thinking blocks.
 - [`streaming_multi_tool.rs`](./examples/streaming_multi_tool.rs) — Multi-turn write→edit→read chain via `Agent::stream`.
 - [`streaming_subagent.rs`](./examples/streaming_subagent.rs) — Sonnet streams, delegates to a Haiku sub-agent.
 - [`streaming_openai_tools.rs`](./examples/streaming_openai_tools.rs) — OpenAI-compatible tool call + no-thinking contract through Chat Completions.

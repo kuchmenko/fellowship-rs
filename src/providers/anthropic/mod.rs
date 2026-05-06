@@ -25,6 +25,12 @@ pub struct Anthropic {
     api_key: String,
     client: reqwest::Client,
     base_url: String,
+    thinking: Option<AnthropicThinkingConfig>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AnthropicThinkingConfig {
+    budget_tokens: u32,
 }
 
 impl Anthropic {
@@ -33,6 +39,7 @@ impl Anthropic {
             api_key: api_key.into(),
             client: reqwest::Client::new(),
             base_url: DEFAULT_BASE_URL.to_string(),
+            thinking: None,
         }
     }
 
@@ -52,6 +59,17 @@ impl Anthropic {
         self
     }
 
+    /// Enable Anthropic extended thinking with a manual token budget.
+    ///
+    /// Anthropic requires `budget_tokens >= 1024` and less than
+    /// `max_tokens`; invalid combinations are rejected by the API. When
+    /// enabled, tkach omits `temperature` because Anthropic marks it as
+    /// incompatible with thinking.
+    pub fn with_thinking_budget(mut self, budget_tokens: u32) -> Self {
+        self.thinking = Some(AnthropicThinkingConfig { budget_tokens });
+        self
+    }
+
     /// Endpoint URL for `complete` / `stream` (`{base}/v1/messages`).
     pub(crate) fn messages_url(&self) -> String {
         format!("{}/v1/messages", self.base_url)
@@ -66,7 +84,7 @@ impl Anthropic {
 #[async_trait]
 impl LlmProvider for Anthropic {
     async fn stream(&self, request: Request) -> Result<ProviderEventStream, ProviderError> {
-        let mut body = build_request_body(&request);
+        let mut body = build_request_body_with_thinking(&request, self.thinking);
         body.stream = true;
 
         let response = self
@@ -96,7 +114,7 @@ impl LlmProvider for Anthropic {
     }
 
     async fn complete(&self, request: Request) -> Result<Response, ProviderError> {
-        let body = build_request_body(&request);
+        let body = build_request_body_with_thinking(&request, self.thinking);
 
         let response = self
             .client
@@ -519,10 +537,19 @@ pub(crate) struct ApiRequest {
     pub(crate) tools: Vec<ApiTool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) temperature: Option<f32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) thinking: Option<ApiThinkingConfig>,
     /// `stream: true` switches the response to SSE; default false for
     /// `complete()`. Always false on the batch path.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub(crate) stream: bool,
+}
+
+#[derive(Serialize)]
+pub(crate) struct ApiThinkingConfig {
+    #[serde(rename = "type")]
+    pub(crate) kind: &'static str,
+    pub(crate) budget_tokens: u32,
 }
 
 #[derive(Serialize)]
@@ -607,7 +634,15 @@ pub(crate) struct ApiUsage {
 
 // --- Conversion ---
 
+#[cfg(test)]
 pub(crate) fn build_request_body(request: &Request) -> ApiRequest {
+    build_request_body_with_thinking(request, None)
+}
+
+pub(crate) fn build_request_body_with_thinking(
+    request: &Request,
+    thinking: Option<AnthropicThinkingConfig>,
+) -> ApiRequest {
     let messages = request.messages.iter().filter_map(message_to_api).collect();
 
     let tools = request
@@ -636,7 +671,11 @@ pub(crate) fn build_request_body(request: &Request) -> ApiRequest {
                 .collect()
         }),
         tools,
-        temperature: request.temperature,
+        temperature: thinking.is_none().then_some(request.temperature).flatten(),
+        thinking: thinking.map(|config| ApiThinkingConfig {
+            kind: "enabled",
+            budget_tokens: config.budget_tokens,
+        }),
         stream: false,
     }
 }
@@ -886,6 +925,49 @@ mod tests {
         let block = &json["messages"][0]["content"][0];
         assert_eq!(block["type"], "tool_result");
         assert_eq!(block["cache_control"]["type"], "ephemeral");
+    }
+
+    #[test]
+    fn request_with_thinking_budget_serializes_top_level_thinking() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user_text("solve")],
+            tools: vec![],
+            max_tokens: 2048,
+            temperature: None,
+        };
+        let body = build_request_body_with_thinking(
+            &req,
+            Some(AnthropicThinkingConfig {
+                budget_tokens: 1024,
+            }),
+        );
+        let json = serde_json::to_value(&body).unwrap();
+
+        assert_eq!(json["thinking"]["type"], "enabled");
+        assert_eq!(json["thinking"]["budget_tokens"], 1024);
+    }
+
+    #[test]
+    fn request_with_thinking_omits_temperature() {
+        let req = Request {
+            model: "m".into(),
+            system: None,
+            messages: vec![Message::user_text("solve")],
+            tools: vec![],
+            max_tokens: 2048,
+            temperature: Some(0.2),
+        };
+        let body = build_request_body_with_thinking(
+            &req,
+            Some(AnthropicThinkingConfig {
+                budget_tokens: 1024,
+            }),
+        );
+        let json = serde_json::to_value(&body).unwrap();
+
+        assert!(json.get("temperature").is_none());
     }
 
     #[test]
