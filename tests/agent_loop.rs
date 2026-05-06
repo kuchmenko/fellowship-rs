@@ -735,6 +735,78 @@ async fn stream_thinking_response_forwards_live_and_preserves_history() {
 }
 
 #[tokio::test]
+async fn stream_redacted_thinking_preserves_metadata_without_visible_text() {
+    let redacted = Content::thinking(
+        "",
+        ThinkingProvider::Anthropic,
+        ThinkingMetadata::anthropic_redacted("opaque-redacted-payload"),
+    );
+
+    let agent = Agent::builder()
+        .provider(Mock::new(move |_req| {
+            Ok(Response {
+                content: vec![redacted.clone(), Content::text("Done.")],
+                stop_reason: StopReason::EndTurn,
+                usage: Usage::default(),
+            })
+        }))
+        .model("test")
+        .working_dir(test_dir())
+        .build();
+
+    let mut stream = agent.stream(prompt("hi"), CancellationToken::new());
+    let mut saw_redacted_block = false;
+    let mut visible = String::new();
+    while let Some(ev) = stream.next().await {
+        match ev.unwrap() {
+            StreamEvent::ThinkingDelta { text } => {
+                assert!(
+                    text.is_empty(),
+                    "redacted thinking must not leak display text"
+                );
+            }
+            StreamEvent::ThinkingBlock {
+                text,
+                provider,
+                metadata,
+            } => {
+                assert!(
+                    text.is_empty(),
+                    "redacted thinking block should have no display text"
+                );
+                assert_eq!(provider, ThinkingProvider::Anthropic);
+                assert_eq!(
+                    metadata,
+                    ThinkingMetadata::AnthropicRedacted {
+                        data: "opaque-redacted-payload".into(),
+                    }
+                );
+                saw_redacted_block = true;
+            }
+            StreamEvent::ContentDelta(text) => visible.push_str(&text),
+            _ => {}
+        }
+    }
+    let result = stream.into_result().await.unwrap();
+
+    assert!(
+        saw_redacted_block,
+        "consumer should see finalized redacted metadata"
+    );
+    assert_eq!(visible, "Done.");
+    assert_eq!(result.text, "Done.");
+    let contents = &result.new_messages[0].content;
+    assert!(matches!(
+        &contents[0],
+        Content::Thinking {
+            text,
+            provider: ThinkingProvider::Anthropic,
+            metadata: ThinkingMetadata::AnthropicRedacted { data },
+        } if text.is_empty() && data == "opaque-redacted-payload"
+    ));
+}
+
+#[tokio::test]
 async fn stream_tool_call_then_text_response_executes_tool_inline() {
     let call = Arc::new(AtomicUsize::new(0));
     let call_clone = call.clone();

@@ -6,14 +6,18 @@
 //! arrive as typed thinking events and go to stderr.
 //!
 //! `AgentResult.text` remains visible-answer-only. Finalized thinking
-//! blocks are preserved in `AgentResult.new_messages` for replay.
+//! blocks are preserved in `AgentResult.new_messages` for replay. If
+//! Anthropic redacts thinking, the example reports that a redacted block
+//! arrived but never prints the opaque provider payload.
 //!
 //! Run with:  `ANTHROPIC_API_KEY=sk-... cargo run --example streaming`
 
 use std::io::Write;
 
 use futures::StreamExt;
-use tkach::{Agent, CancellationToken, Message, StreamEvent, providers::Anthropic};
+use tkach::{
+    Agent, CancellationToken, Message, StreamEvent, ThinkingMetadata, providers::Anthropic,
+};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -51,12 +55,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 eprint!("\n[thinking] {text}");
                 std::io::stderr().flush()?;
             }
-            StreamEvent::ThinkingBlock { text, provider, .. } => {
+            StreamEvent::ThinkingBlock {
+                text,
+                provider,
+                metadata,
+            } => {
                 thinking_blocks += 1;
-                eprintln!(
-                    "\n[thinking block: {provider:?}, {} chars; metadata preserved]",
-                    text.chars().count()
-                );
+                match metadata {
+                    ThinkingMetadata::AnthropicRedacted { .. } => {
+                        eprintln!(
+                            "\n[thinking block: {provider:?}, redacted by provider; opaque replay metadata preserved]"
+                        );
+                    }
+                    _ => {
+                        eprintln!(
+                            "\n[thinking block: {provider:?}, {} chars; metadata preserved]",
+                            text.chars().count()
+                        );
+                    }
+                }
             }
             StreamEvent::ToolUse { name, .. } => {
                 eprintln!("\n[tool: {name}]");
